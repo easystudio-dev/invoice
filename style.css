@@ -329,14 +329,32 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 /* td has no side padding so input text (6px inner padding) lines up with the header text */
 .items td { border-bottom: 1px solid var(--line); padding: 6px 0; vertical-align: top; }
 .col-qty, .col-price, .col-total { width: 110px; }
+.col-unit { width: 64px; }
 .items .col-qty, .items .col-price, .items .col-total { text-align: right; }
+.items .col-unit input { text-align: left; }
+.col-move { width: 30px; }
 .col-del { width: 34px; }
 .items input { text-align: right; font-variant-numeric: tabular-nums; }
 .items .col-desc textarea { text-align: left; resize: none; min-height: 22px; overflow: hidden; line-height: 1.4; }
 .items td.row-total { padding: 10px 6px 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .items tbody tr:hover { background: #f8f9f7; }
 
-.del-row {
+/* Per-line VAT category: sits under the line amount so it needs no column of its own on phones. */
+.item-vatcat {
+  display: block;
+  max-width: 100%;
+  margin: 4px 0 0 auto;
+  padding: 1px 2px;
+  border: 1px solid var(--field-edge);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+}
+[data-vat="off"] .item-vatcat { display: none; }
+
+.del-row, .move-row {
   background: none;
   border: none;
   color: var(--muted);
@@ -349,9 +367,16 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   transition: opacity .1s, color .1s;
 }
 /* touch screens have no hover — keep delete visible */
-@media (hover: none) { .del-row { opacity: .6; } }
-.items tbody tr:hover .del-row, .del-row:focus-visible { opacity: 1; }
+@media (hover: none) { .del-row, .move-row { opacity: .6; } }
+.items tbody tr:hover .del-row, .del-row:focus-visible,
+.items tbody tr:hover .move-row, .move-row:focus-visible { opacity: 1; }
 .del-row:hover { color: var(--overdue); }
+
+/* small stacked arrows, one above the other, so the column stays narrow */
+.move-row { display: block; font-size: 10px; min-width: 28px; padding: 4px 8px; }
+.move-row:hover { color: var(--ink); }
+.move-row[aria-disabled="true"] { opacity: .25 !important; cursor: default; }
+.move-row[aria-disabled="true"]:hover { color: var(--muted); }
 
 .add-row-btn {
   width: 100%;
@@ -385,6 +410,16 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .vat-row label { display: flex; align-items: center; gap: 6px; min-height: 24px; cursor: pointer; }
 .vat-row input[type=number] { width: 40px; padding: 2px 4px; text-align: right; border-color: var(--line); margin-left: 6px; }
 .vat-row input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
+.discount-label { display: flex; align-items: center; }
+.discount-controls { display: flex; align-items: center; gap: 6px; }
+.discount-controls label { cursor: pointer; }
+.discount-row input[type=number] { width: 64px; padding: 2px 4px; text-align: right; border-color: var(--line); }
+.discount-row select { border: 1px solid var(--field-edge); border-radius: 4px; background: #fff; color: var(--ink); font-size: 13px; padding: 2px 4px; }
+.print-only { display: none; }
+.cat-row { font-size: 13px; color: var(--muted); }
+.vat-incl-row { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.vat-incl-row label { display: flex; align-items: center; gap: 6px; min-height: 24px; cursor: pointer; }
+.vat-incl-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
 .total-row { font-weight: 700; font-size: 20px; border-bottom: 2px solid var(--ink); padding-top: 12px; }
 
 /* --- Narrow screens: rail stacks on top, ledger folds into its summary line --- */
@@ -412,12 +447,17 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   .meta-row input, .meta-row select { width: 140px; }
   .stamp { font-size: 34px; top: -6px; }
   .totals-block { min-width: 0; }
-  .col-qty { width: 44px; }
-  .col-price, .col-total { width: 76px; }
+  .col-qty { width: 38px; }
+  .col-unit { width: 40px; }
+  .col-price, .col-total { width: 66px; }
   .items th { padding: 6px 3px; }
   .items td, .items input, .items textarea, .items td.row-total { font-size: 13px; }
   .items td.row-total { padding: 10px 3px 0; }
-  .col-del { width: 32px; }
+  .col-del { width: 26px; }
+  .col-move { width: 26px; }
+  .items td.col-unit input, .items td.col-qty input, .items td.col-price input { padding-left: 3px; padding-right: 3px; }
+  .move-row, .del-row { min-width: 24px; padding-left: 4px; padding-right: 4px; }
+  .item-vatcat { font-size: 11px; padding: 1px 0; }
 }
 
 @media (max-width: 420px) {
@@ -432,6 +472,10 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   .app { display: block; min-height: 0; }
   .desk { padding: 0; }
   .no-print { display: none !important; }
+  .print-only { display: inline; }
+  .discount-zero, .vat-off { display: none; }
+  .items .vat-mark { display: block; padding: 0 6px; font-size: 11px; color: var(--muted); }
+  .items .vat-mark:empty { display: none; }
   .sheet { box-shadow: none !important; padding: 0; max-width: none; }
   ::placeholder { color: transparent; }
   input, textarea { border: none !important; background: transparent !important; }

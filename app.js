@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'invoice-draft';
 
 const itemsBody = document.getElementById('itemsBody');
-const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType'];
+const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive'];
 
 const isQuote = () => document.getElementById('docType').value === 'quote';
 const docName = () => (isQuote() ? 'quote' : 'invoice');
@@ -21,23 +21,39 @@ function autosize(ta) {
   ta.style.height = ta.scrollHeight + 'px';
 }
 
-function addItem(data = { desc: '', qty: 1, price: 0 }, focus = false) {
+function addItem(data = { desc: '', qty: 1, unit: '', price: 0, vatCat: 'standard' }, focus = false) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td class="col-desc"><textarea class="item-desc" placeholder="Description" aria-label="Description" rows="1"></textarea></td>
-    <td class="col-qty"><input class="item-qty" type="number" min="0" step="1" aria-label="Quantity"></td>
+    <td class="col-desc"><textarea class="item-desc" placeholder="Description" aria-label="Description" rows="1"></textarea><span class="vat-mark print-only"></span></td>
+    <td class="col-qty"><input class="item-qty" type="number" min="0" step="any" aria-label="Quantity"></td>
+    <td class="col-unit"><input class="item-unit" aria-label="Unit (hrs, days, items)" placeholder="hrs" maxlength="12"></td>
     <td class="col-price"><input class="item-price" type="number" step="0.01" aria-label="Unit price" title="Use a negative price for a discount"></td>
-    <td class="col-total row-total">R 0.00</td>
+    <td class="col-total row-total">
+      <span class="row-amount">R 0.00</span>
+      <select class="item-vatcat no-print" aria-label="VAT category" title="VAT category">
+        <option value="standard">Std</option>
+        <option value="zero">Zero</option>
+        <option value="exempt">Exempt</option>
+      </select>
+    </td>
+    <td class="col-move no-print">
+      <button type="button" class="move-row move-up" aria-label="Move line up" title="Move line up">&#9650;</button>
+      <button type="button" class="move-row move-down" aria-label="Move line down" title="Move line down">&#9660;</button>
+    </td>
     <td class="col-del no-print"><button type="button" class="del-row" aria-label="Remove line" title="Remove line">&times;</button></td>
   `;
   const desc = tr.querySelector('.item-desc');
   desc.value = data.desc;
   tr.querySelector('.item-qty').value = data.qty;
+  tr.querySelector('.item-unit').value = data.unit || '';
   tr.querySelector('.item-price').value = data.price;
+  tr.querySelector('.item-vatcat').value = vatCategory(data);
   itemsBody.appendChild(tr);
   autosize(desc);
 
   tr.querySelector('.del-row').addEventListener('click', () => { tr.remove(); recalc(); save(); });
+  tr.querySelector('.move-up').addEventListener('click', () => moveRow(tr, -1, '.move-up'));
+  tr.querySelector('.move-down').addEventListener('click', () => moveRow(tr, 1, '.move-down'));
   desc.addEventListener('input', () => autosize(desc));
   desc.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -49,13 +65,79 @@ function addItem(data = { desc: '', qty: 1, price: 0 }, focus = false) {
   if (focus) desc.focus();
 }
 
+// Swaps the row with its neighbour, then puts focus back on the same button so it can be pressed repeatedly.
+function moveRow(tr, dir, btnSelector) {
+  const other = dir < 0 ? tr.previousElementSibling : tr.nextElementSibling;
+  if (!other) return;
+  if (dir < 0) other.before(tr); else other.after(tr);
+  recalc();
+  save();
+  tr.querySelector(btnSelector).focus();
+}
+
+// The first row can't go up and the last can't go down. aria-disabled, not disabled: a disabled
+// button drops keyboard focus, which would strand someone who just moved a row to the end.
+function updateMoveButtons() {
+  const rows = [...itemsBody.querySelectorAll('tr')];
+  rows.forEach((tr, i) => {
+    tr.querySelector('.move-up').setAttribute('aria-disabled', i === 0);
+    tr.querySelector('.move-down').setAttribute('aria-disabled', i === rows.length - 1);
+  });
+}
+
+function discountSetting() {
+  return { type: document.getElementById('discountType').value, value: document.getElementById('discountValue').value };
+}
+
+// Print shows "Discount (10%)" or plain "Discount"; the row is hidden on paper when there's no discount.
+function showDiscount(t) {
+  const { type, value } = discountSetting();
+  const percent = type === 'percent' && t.discount > 0;
+  document.getElementById('discountPrintLabel').textContent = percent ? `Discount (${parseFloat(value)}%)` : 'Discount';
+  document.getElementById('discountRow').classList.toggle('discount-zero', t.discount === 0);
+  document.getElementById('discountAmount').textContent = money(-t.discount);
+}
+
+const VAT_MARKS = { zero: 'Zero-rated', exempt: 'VAT exempt' };
+const CATEGORY_ROWS = { standard: 'catStandard', zero: 'catZero', exempt: 'catExempt' };
+
+// SARS: a tax invoice shows the VAT-exclusive value, the VAT and the VAT-inclusive total. A mix of
+// standard, zero-rated and exempt lines also lists each kind's value; those rows add up to "Total excl. VAT".
+function showVat(t, vatOn, vatRate, inclusive) {
+  const shown = vatOn ? Object.keys(CATEGORY_ROWS).filter(cat => t.categories[cat].net !== 0) : [];
+  Object.entries(CATEGORY_ROWS).forEach(([cat, id]) => {
+    document.getElementById(id + 'Row').hidden = shown.length < 2 || !shown.includes(cat);
+    document.getElementById(id).textContent = money(t.categories[cat].net);
+  });
+  document.getElementById('catStandardLabel').textContent = `Standard-rated (${vatRate}%)`;
+  document.getElementById('netRow').hidden = !vatOn || !(inclusive || t.discount > 0 || shown.length > 1);
+  document.getElementById('netAmount').textContent = money(t.net);
+  document.getElementById('subtotalLabel').textContent =
+    vatOn ? `Subtotal (${inclusive ? 'incl.' : 'excl.'} VAT)` : 'Subtotal';
+  document.getElementById('vatPrintLabel').textContent = `VAT (${vatRate}%)`;
+  document.getElementById('vatRow').classList.toggle('vat-off', !vatOn);
+  document.getElementById('vatInclusiveRow').hidden = !vatOn;
+  document.body.dataset.vat = vatOn ? 'on' : 'off';
+}
+
 function recalc() {
   const rows = [...itemsBody.querySelectorAll('tr')];
-  const items = rows.map(tr => ({ qty: tr.querySelector('.item-qty').value, price: tr.querySelector('.item-price').value }));
+  const items = rows.map(tr => ({
+    qty: tr.querySelector('.item-qty').value,
+    price: tr.querySelector('.item-price').value,
+    vatCat: tr.querySelector('.item-vatcat').value,
+  }));
   const vatOn = document.getElementById('vatToggle').checked;
   const vatRate = vatOn ? parseFloat(document.getElementById('vatRate').value) || 0 : 0;
-  const t = invoiceTotals(items, vatRate);
-  rows.forEach((tr, i) => { tr.querySelector('.row-total').textContent = money(t.lineTotals[i]); });
+  const inclusive = vatOn && document.getElementById('vatInclusive').checked;
+  const t = invoiceTotals(items, vatRate, discountSetting(), { inclusive });
+  showDiscount(t);
+  showVat(t, vatOn, vatRate, inclusive);
+  updateMoveButtons();
+  rows.forEach((tr, i) => {
+    tr.querySelector('.row-amount').textContent = money(t.lineTotals[i]);
+    tr.querySelector('.vat-mark').textContent = vatOn ? VAT_MARKS[items[i].vatCat] || '' : '';
+  });
   document.getElementById('subtotal').textContent = money(t.subtotal);
   document.getElementById('vatAmount').textContent = money(t.vat);
   document.getElementById('grandTotal').textContent = money(t.total);
@@ -65,7 +147,7 @@ function recalc() {
   document.querySelector('.doc-title').textContent = quote ? 'QUOTE' : vatOn ? 'TAX INVOICE' : 'INVOICE';
   document.querySelector('label[for=invNumber]').textContent = quote ? 'Quote #' : 'Invoice #';
   document.querySelector('label[for=dueDate]').textContent = quote ? 'Valid until' : 'Due date';
-  document.getElementById('totalLabel').textContent = quote ? 'Total' : 'Total due';
+  document.getElementById('totalLabel').textContent = vatOn ? 'Total incl. VAT' : quote ? 'Total' : 'Total due';
   document.getElementById('newInvoiceBtn').textContent = `New ${docName()}`;
   updateStamp();
 }
@@ -79,13 +161,15 @@ function collectData() {
   data.items = [...itemsBody.querySelectorAll('tr')].map(tr => ({
     desc: tr.querySelector('.item-desc').value,
     qty: tr.querySelector('.item-qty').value,
+    unit: tr.querySelector('.item-unit').value,
     price: tr.querySelector('.item-price').value,
+    vatCat: tr.querySelector('.item-vatcat').value,
   }));
   return data;
 }
 
 function applyData(data) {
-  data = { docType: 'invoice', ...data }; // saves from before quotes existed
+  data = { docType: 'invoice', discountType: 'percent', discountValue: '', ...data }; // saves from before quotes / discounts existed
   fields.forEach(id => {
     const el = document.getElementById(id);
     // Missing checkbox = unchecked, so older saves without `paid` don't inherit the previous invoice's tick.
@@ -181,8 +265,8 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
     invNumber: nextFreeNumber(getSavedList(), docName(), data.invNumber.trim()),
     invDate: localISODate(new Date()),
     dueDate: '',
-    toName: '', toDetails: '', toEmail: '', paid: false,
-    items: [{ desc: '', qty: 1, price: 0 }],
+    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '',
+    items: [{ desc: '', qty: 1, unit: '', price: 0 }],
   });
   applyDueDate();
   setOpenInvoice('');
@@ -293,8 +377,9 @@ function refreshInvoiceList() {
   document.getElementById('ledgerEmpty').hidden = numbers.length > 0;
   invoiceListEl.replaceChildren(...numbers.map(num => {
     const inv = list[num];
+    const { total } = invoiceTotals(inv.items || [], inv.vatToggle ? parseFloat(inv.vatRate) || 0 : 0,
+      { type: inv.discountType, value: inv.discountValue }, { inclusive: !!(inv.vatToggle && inv.vatInclusive) });
     const status = invoiceStatus(inv, today);
-    const { total } = invoiceTotals(inv.items || [], inv.vatToggle ? parseFloat(inv.vatRate) || 0 : 0);
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'ledger-row';

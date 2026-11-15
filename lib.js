@@ -22,12 +22,60 @@ function round2(n) {
   return Math.sign(n) * Math.round(Math.abs(n) * 100 + 1e-6) / 100;
 }
 
+// Discount comes off the subtotal before VAT. It can't be negative or exceed the subtotal
+// (a negative-price line can make the subtotal itself <= 0, which leaves nothing to discount).
+function discountAmount(subtotal, discount) {
+  const value = Math.max(0, parseFloat(discount && discount.value) || 0);
+  const raw = discount && discount.type === 'amount' ? value : subtotal * value / 100;
+  return Math.max(0, Math.min(round2(raw), subtotal));
+}
+
+const VAT_CATEGORIES = ['standard', 'zero', 'exempt'];
+
+// Lines saved before VAT categories existed (or with an unknown value) are standard-rated.
+function vatCategory(item) {
+  return VAT_CATEGORIES.includes(item && item.vatCat) ? item.vatCat : 'standard';
+}
+
+// Splits `total` across `amounts` pro rata, each share rounded to cents. The rounding remainder goes on
+// the largest amount so the shares always add up to `total` exactly.
+function apportion(total, amounts, sum) {
+  if (!total || !sum) return amounts.map(() => 0);
+  const shares = amounts.map(a => round2(total * a / sum));
+  const largest = amounts.indexOf(Math.max(...amounts));
+  shares[largest] = round2(shares[largest] + total - round2(shares.reduce((a, b) => a + b, 0)));
+  return shares;
+}
+
 // Each line is rounded before summing so the printed line totals add up exactly to the subtotal.
-function invoiceTotals(items, vatRate) {
+// `discount` is optional: { type: 'percent' | 'amount', value }. VAT is charged on `net`, the discounted subtotal.
+// Items may carry `vatCat` ('standard' | 'zero' | 'exempt'); only standard lines pay `vatRate`. The discount is
+// apportioned across the categories and VAT worked out per category on its discounted amount.
+// `options.inclusive`: prices already include VAT, so `subtotal` and the lines are VAT-inclusive and the
+// discounted subtotal is the total. Per category VAT = round2(gross × rate / (100 + rate)) and excl = gross − VAT,
+// so excl + VAT = gross to the cent in every category and on the invoice.
+// `categories[cat]` = { amount (as entered, before discount), discount, net (excl. VAT), vat, total }.
+function invoiceTotals(items, vatRate, discount, options = {}) {
+  const rate = vatRate || 0;
+  const inclusive = !!options.inclusive;
   const lineTotals = items.map(it => round2((parseFloat(it.qty) || 0) * (parseFloat(it.price) || 0)));
   const subtotal = round2(lineTotals.reduce((a, b) => a + b, 0));
-  const vat = round2(subtotal * (vatRate || 0) / 100);
-  return { lineTotals, subtotal, vat, total: round2(subtotal + vat) };
+  const discountOff = discountAmount(subtotal, discount);
+  const amounts = VAT_CATEGORIES.map(cat =>
+    round2(lineTotals.reduce((sum, t, i) => (vatCategory(items[i]) === cat ? sum + t : sum), 0)));
+  const shares = apportion(discountOff, amounts, subtotal);
+  const categories = {};
+  VAT_CATEGORIES.forEach((cat, i) => {
+    const after = round2(amounts[i] - shares[i]);
+    const r = cat === 'standard' ? rate : 0;
+    const vat = round2(inclusive ? after * r / (100 + r) : after * r / 100);
+    const net = inclusive ? round2(after - vat) : after;
+    categories[cat] = { amount: amounts[i], discount: shares[i], net, vat, total: round2(net + vat) };
+  });
+  const vat = round2(VAT_CATEGORIES.reduce((sum, cat) => sum + categories[cat].vat, 0));
+  const discounted = round2(subtotal - discountOff);
+  const net = inclusive ? round2(discounted - vat) : discounted;
+  return { lineTotals, subtotal, discount: discountOff, net, vat, total: inclusive ? discounted : round2(net + vat), categories };
 }
 
 // INV-0009 → INV-0010: bumps the last run of digits, keeping its zero padding.
@@ -61,4 +109,4 @@ function invoiceStatus(inv, today) {
   return '';
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus };
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus };

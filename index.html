@@ -132,15 +132,17 @@
           <tr>
             <th class="col-desc">Description</th>
             <th class="col-qty">Qty</th>
+            <th class="col-unit">Unit</th>
             <th class="col-price">Unit price</th>
             <th class="col-total">Amount</th>
+            <th class="col-move no-print"><span class="visually-hidden">Move</span></th>
             <th class="col-del no-print"><span class="visually-hidden">Remove</span></th>
           </tr>
         </thead>
         <tbody id="itemsBody"></tbody>
         <tfoot class="no-print">
           <tr>
-            <td colspan="5">
+            <td colspan="7">
               <button id="addItem" type="button" class="add-row-btn">+ Add line item</button>
             </td>
           </tr>
@@ -153,10 +155,34 @@
           <textarea id="notes" placeholder="Bank: &#10;Account No: &#10;Branch Code: &#10;Reference: INV-0001&#10;Payment terms: Due within 7 days"></textarea>
         </div>
         <div class="totals-block">
-          <div class="totals-row"><span>Subtotal</span><span id="subtotal">R 0.00</span></div>
-          <div class="totals-row vat-row">
-            <span class="vat-label"><label><input type="checkbox" id="vatToggle"> VAT</label><input type="number" id="vatRate" value="15" min="0" max="100" aria-label="VAT rate">%</span>
+          <div class="totals-row"><span id="subtotalLabel">Subtotal</span><span id="subtotal">R 0.00</span></div>
+          <div class="totals-row discount-row" id="discountRow">
+            <span class="discount-label">
+              <span class="no-print discount-controls">
+                <label for="discountValue">Discount</label>
+                <input type="number" id="discountValue" min="0" step="any" aria-label="Discount value">
+                <select id="discountType" aria-label="Discount type">
+                  <option value="percent" selected>%</option>
+                  <option value="amount">Amount</option>
+                </select>
+              </span>
+              <span id="discountPrintLabel" class="print-only">Discount</span>
+            </span>
+            <span id="discountAmount">R 0.00</span>
+          </div>
+          <div class="totals-row cat-row" id="catStandardRow" hidden><span id="catStandardLabel">Standard-rated</span><span id="catStandard">R 0.00</span></div>
+          <div class="totals-row cat-row" id="catZeroRow" hidden><span>Zero-rated (0%)</span><span id="catZero">R 0.00</span></div>
+          <div class="totals-row cat-row" id="catExemptRow" hidden><span>Exempt</span><span id="catExempt">R 0.00</span></div>
+          <div class="totals-row" id="netRow" hidden><span>Total excl. VAT</span><span id="netAmount">R 0.00</span></div>
+          <div class="totals-row vat-row" id="vatRow">
+            <span>
+              <span class="vat-label no-print"><label><input type="checkbox" id="vatToggle"> VAT</label><input type="number" id="vatRate" value="15" min="0" max="100" aria-label="VAT rate">%</span>
+              <span id="vatPrintLabel" class="print-only">VAT</span>
+            </span>
             <span id="vatAmount">R 0.00</span>
+          </div>
+          <div class="vat-incl-row no-print" id="vatInclusiveRow" hidden>
+            <label><input type="checkbox" id="vatInclusive"> Prices include VAT</label>
           </div>
           <div class="totals-row total-row"><span id="totalLabel">Total due</span><span id="grandTotal">R 0.00</span></div>
         </div>
