@@ -320,4 +320,39 @@ function zohoInvoiceRows(list, numbers, taxName = 'VAT') {
   return rows;
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS };
+// Bank details printed as "Pay by EFT". `details` holds bankName / bankHolder / bankAccount / bankBranch / bankType.
+const EFT_ACCOUNT_TYPES = { cheque: 'Cheque / Current', savings: 'Savings', transmission: 'Transmission' };
+
+// [label, value] rows for the EFT block: the bank fields that are filled, then the reference (the invoice number).
+// [] when no bank field is filled, so a bare reference never prints on its own.
+function eftRows(details, reference) {
+  const d = details || {};
+  const text = k => (typeof d[k] === 'string' ? d[k].trim() : '');
+  const rows = [['Bank', text('bankName')], ['Account holder', text('bankHolder')], ['Account number', text('bankAccount')],
+    ['Branch code', text('bankBranch')], ['Account type', EFT_ACCOUNT_TYPES[d.bankType] || '']].filter(r => r[1]);
+  const ref = typeof reference === 'string' ? reference.trim() : '';
+  if (rows.length && ref) rows.push(['Reference', ref]);
+  return rows;
+}
+
+// Online payment link from a URL template with {amount}, {number} and {currency}; each value is URL-encoded.
+// Returns the URL, or '' unless the result is a plain https URL: imported backups can hold anything, and a
+// javascript: / data: / http: link must never reach an href. Whitespace, < and > (an unfilled "<name>") are rejected too.
+function paymentLink(template, { amount, number, currency } = {}) {
+  if (typeof template !== 'string') return '';
+  const text = template.trim();
+  if (!text || /[\s<>]/.test(text)) return '';
+  const n = typeof amount === 'number' ? amount : parseFloat(amount);
+  const values = {
+    amount: Number.isFinite(n) ? n.toFixed(2) : '',
+    number: String(number ?? '').trim(),
+    currency: String(currency ?? '').trim(),
+  };
+  const filled = text.replace(/\{(amount|number|currency)\}/g, (_, k) => encodeURIComponent(values[k]));
+  try {
+    const url = new URL(filled);
+    return url.protocol === 'https:' && url.hostname && !url.username && !url.password ? url.href : '';
+  } catch { return ''; }
+}
+
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

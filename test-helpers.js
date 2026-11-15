@@ -22,6 +22,7 @@ function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false 
     });
   }
   w.eval(read('lib.js'));
+  w.eval(read('vendor/qrcode.js'));
   w.eval(read('app.js'));
   const d = w.document;
   const $ = sel => d.querySelector(sel);

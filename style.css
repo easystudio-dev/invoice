@@ -502,6 +502,27 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .payment-msg { margin: 4px 0 0; min-height: 1em; font-size: 12px; color: var(--overdue); }
 .total-row { font-weight: 700; font-size: 20px; border-bottom: 2px solid var(--ink); padding-top: 12px; }
 
+/* --- Payment details: EFT block and online payment link. Inputs are screen-only; the blocks below them print. --- */
+.sheet-pay { display: flex; gap: 32px; margin-top: 28px; }
+.pay-col { flex: 1; min-width: 0; }
+.pay-settings { margin: 0; padding: 8px 10px 10px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.pay-settings legend { padding: 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.pay-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; align-items: center; }
+.pay-grid label { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.pay-settings input, .pay-settings select { border: 1px solid var(--field-edge); border-radius: 4px; background: #fff; color: var(--ink); font-size: 13px; padding: 4px 6px; min-width: 0; }
+.pay-settings select { width: 100%; }
+.pay-link-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.pay-link-row input { flex: 1 1 200px; }
+.pay-link-row select { flex: 0 1 auto; width: auto; }
+.pay-hint { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.pay-msg { margin: 4px 0 0; min-height: 1em; font-size: 12px; color: var(--overdue); }
+.eft-print { display: none; }
+.pay-online { margin-top: 12px; font-size: 14px; }
+.pay-online-text { margin: 0; overflow-wrap: anywhere; word-break: break-all; }
+.pay-online-text span { font-weight: 600; }
+.pay-online a { color: var(--paid); }
+.pay-qr { display: none; }
+
 /* --- Narrow screens: rail stacks on top, ledger folds into its summary line --- */
 @media (max-width: 900px) {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "rail" "desk" "foot"; }
@@ -521,7 +542,7 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   .desk-bar-group .btn { flex: 1 1 auto; justify-content: center; }
   .desk-bar-group #deleteInvoiceBtn { flex: 0 0 auto; }
   .sheet { padding: 24px 18px; }
-  .sheet-head, .sheet-parties, .sheet-summary { flex-direction: column; gap: 20px; }
+  .sheet-head, .sheet-parties, .sheet-summary, .sheet-pay { flex-direction: column; gap: 20px; }
   .invoice-meta { text-align: left; min-width: 0; }
   .meta-row { justify-content: space-between; }
   .meta-row input, .meta-row select { width: 140px; }
@@ -563,6 +584,17 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   .logo-drop { border: none; }
   .logo-drop:not(.has-logo) { display: none; }
   .stamp { mix-blend-mode: normal; right: 16px; }
+  .sheet-pay { margin-top: 20px; break-inside: avoid; }
+  .eft-print { display: block; break-inside: avoid; }
+  .eft-title { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+  .eft-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 14px; margin: 0; font-size: 13px; }
+  .eft-rows dt { color: var(--muted); }
+  .eft-rows dd { margin: 0; overflow-wrap: anywhere; }
+  .pay-online { break-inside: avoid; font-size: 13px; }
+  .pay-online a { color: var(--ink); text-decoration: none; }
+  .pay-qr { display: block; width: 28mm; height: 28mm; margin-top: 8px; }
+  .pay-qr[hidden] { display: none; }
+  .pay-qr svg { display: block; width: 100%; height: 100%; }
   textarea { resize: none; }
   input::-webkit-calendar-picker-indicator { display: none; }
 }

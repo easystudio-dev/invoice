@@ -194,8 +194,8 @@
 
       <section class="sheet-summary">
         <div class="notes-block">
-          <label class="field-label no-print" for="notes">Notes and banking details</label>
-          <textarea id="notes" placeholder="Bank: &#10;Account No: &#10;Branch Code: &#10;Reference: INV-0001&#10;Payment terms: Due within 7 days"></textarea>
+          <label class="field-label no-print" for="notes">Notes</label>
+          <textarea id="notes" placeholder="Payment terms, a thank-you, anything else the client should know"></textarea>
         </div>
         <div class="totals-block">
           <div class="totals-row"><span id="subtotalLabel">Subtotal</span><span id="subtotal">R 0.00</span></div>
@@ -244,6 +244,50 @@
           </div>
         </div>
       </section>
+
+      <section class="sheet-pay">
+        <div class="pay-col">
+          <fieldset class="pay-settings no-print">
+            <legend>Payment details (EFT)</legend>
+            <div class="pay-grid">
+              <label for="bankName">Bank</label><input id="bankName" autocomplete="off">
+              <label for="bankHolder">Account holder</label><input id="bankHolder" autocomplete="off">
+              <label for="bankAccount">Account number</label><input id="bankAccount" inputmode="numeric" autocomplete="off">
+              <label for="bankBranch">Branch code</label><input id="bankBranch" inputmode="numeric" autocomplete="off">
+              <label for="bankType">Account type</label>
+              <select id="bankType">
+                <option value="">Not shown</option>
+                <option value="cheque">Cheque / Current</option>
+                <option value="savings">Savings</option>
+                <option value="transmission">Transmission</option>
+              </select>
+            </div>
+            <p class="pay-hint">Printed on invoices as “Pay by EFT”, with the invoice number as the reference.</p>
+          </fieldset>
+          <div id="eftPrint" class="eft-print" hidden>
+            <h3 class="eft-title">Pay by EFT</h3>
+            <dl id="eftRows" class="eft-rows"></dl>
+          </div>
+        </div>
+        <div class="pay-col">
+          <fieldset class="pay-settings no-print">
+            <legend>Online payment link</legend>
+            <div class="pay-link-row">
+              <input id="payLink" type="url" inputmode="url" autocomplete="off" aria-label="Online payment link template" placeholder="https://… (optional)" aria-describedby="payLinkHint">
+              <select id="payPreset" aria-label="Payment link preset">
+                <option value="">Custom</option>
+                <option value="paypal">PayPal.me</option>
+              </select>
+            </div>
+            <p id="payLinkHint" class="pay-hint">Use {amount} (balance due), {number} and {currency} where the link needs them. Only https links are used. Yoco, Paystack or Stripe links made in their dashboards work as Custom.</p>
+            <p id="payLinkMsg" class="pay-msg" role="status"></p>
+          </fieldset>
+          <div id="payOnline" class="pay-online" hidden>
+            <p class="pay-online-text"><span>Pay online: </span><a id="payOnlineLink" target="_blank" rel="noopener"></a></p>
+            <div id="payQr" class="pay-qr" role="img" aria-label="QR code for the online payment link"></div>
+          </div>
+        </div>
+      </section>
     </article>
 
   </main>
@@ -281,6 +325,7 @@
   </footer>
 </div>
 <script src="lib.js"></script>
+<script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, paymentLink } = require('./lib.js');
 
 // The fields invoiceTotals returned before VAT categories existed (it now also returns `categories`).
 const legacy = ({ lineTotals, subtotal, discount, net, vat, total }) => ({ lineTotals, subtotal, discount, net, vat, total });
@@ -576,4 +576,69 @@ test('zohoInvoiceRows: VAT off has no tax columns; on has standard, zero and exe
   assert.deepStrictEqual(col(on, 'Is Inclusive Tax'), ['false', 'false', 'false']);
   const inc = zohoInvoiceRows({ a: zInv({ vatToggle: true, vatInclusive: true }) }, ['a']);
   assert.strictEqual(col(inc, 'Is Inclusive Tax')[0], 'true');
+});
+
+// --- EFT block and payment link ---
+test('eftRows: only filled fields, trimmed, then the reference', () => {
+  assert.deepStrictEqual(eftRows({ bankName: ' FNB ', bankAccount: '62123456789', bankType: 'savings' }, ' INV-0007 '),
+    [['Bank', 'FNB'], ['Account number', '62123456789'], ['Account type', 'Savings'], ['Reference', 'INV-0007']]);
+  assert.deepStrictEqual(eftRows({ bankHolder: 'A Co', bankBranch: '250655', bankType: 'cheque' }, 'X').map(r => r[0]),
+    ['Account holder', 'Branch code', 'Account type', 'Reference']);
+});
+
+test('eftRows: nothing when no bank field is filled; unknown type and missing reference ignored', () => {
+  assert.deepStrictEqual(eftRows({}, 'INV-1'), []);
+  assert.deepStrictEqual(eftRows(undefined, 'INV-1'), []);
+  assert.deepStrictEqual(eftRows({ bankName: '  ', bankType: 'gold' }, 'INV-1'), []);
+  assert.deepStrictEqual(eftRows({ bankName: 'FNB' }, ''), [['Bank', 'FNB']]);
+  assert.deepStrictEqual(eftRows({ bankName: 5 }, 'INV-1'), []);
+});
+
+const link = (t, o = {}) => paymentLink(t, { amount: 1234.5, number: 'INV-0007', currency: 'ZAR', ...o });
+
+test('paymentLink: substitutes amount (2 dp, dot), number and currency', () => {
+  assert.strictEqual(link('https://pay.example.com/{number}?a={amount}&c={currency}'), 'https://pay.example.com/INV-0007?a=1234.50&c=ZAR');
+  assert.strictEqual(link('https://paypal.me/jo/{amount}{currency}'), 'https://paypal.me/jo/1234.50ZAR');
+  assert.strictEqual(link('https://x.co/?a={amount}&b={amount}'), 'https://x.co/?a=1234.50&b=1234.50');
+  assert.strictEqual(link('https://x.co/?a={amount}', { amount: '99' }), 'https://x.co/?a=99.00');
+  assert.strictEqual(link('https://x.co/?a={amount}', { amount: 0.1 + 0.2 }), 'https://x.co/?a=0.30');
+});
+
+test('paymentLink: values are URL-encoded', () => {
+  assert.strictEqual(link('https://x.co/?n={number}', { number: 'INV 0007/a&b=c#d' }), 'https://x.co/?n=INV%200007%2Fa%26b%3Dc%23d');
+  assert.strictEqual(link('https://x.co/?c={currency}', { currency: 'Z&R' }), 'https://x.co/?c=Z%26R');
+  assert.strictEqual(link('https://x.co/{number}', { number: 'é' }), 'https://x.co/%C3%A9');
+});
+
+test('paymentLink: templates without placeholders are fine; unknown placeholders stay literal', () => {
+  assert.strictEqual(link('https://pay.example.com/invoice-link'), 'https://pay.example.com/invoice-link');
+  assert.strictEqual(link('https://x.co/{other}'), 'https://x.co/%7Bother%7D');
+  assert.strictEqual(link('https://x.co/?a={amount}', { amount: NaN }), 'https://x.co/?a=');
+  assert.strictEqual(link('https://x.co/?a={number}', { number: undefined }), 'https://x.co/?a=');
+});
+
+test('paymentLink: only https', () => {
+  ['javascript:alert(1)', 'JavaScript:alert(1)//{number}', 'data:text/html,<b>x</b>', 'http://x.co/{number}', 'ftp://x.co/a',
+    'mailto:a@b.co', 'file:///etc/passwd', 'vbscript:x', '//x.co/a', 'x.co/pay', 'https:', 'https://', '{number}'].forEach(t =>
+    assert.strictEqual(link(t), '', t));
+  assert.strictEqual(link('HTTPS://X.co/a'), 'https://x.co/a');
+});
+
+test('paymentLink: whitespace, angle brackets, credentials and non-strings are rejected', () => {
+  assert.strictEqual(link('  https://x.co/a  '), 'https://x.co/a');
+  assert.strictEqual(link('https://x.co/a b'), '');
+  assert.strictEqual(link('https://x.co/a\tb'), '');
+  assert.strictEqual(link('https://x.co/a\nb'), '');
+  assert.strictEqual(link('https://paypal.me/<name>/{amount}{currency}'), '');
+  assert.strictEqual(link('https://user:pw@x.co/a'), '');
+  assert.strictEqual(link(''), '');
+  assert.strictEqual(link('   '), '');
+  assert.strictEqual(link(null), '');
+  assert.strictEqual(link(42), '');
+  assert.strictEqual(paymentLink('https://x.co/{amount}'), 'https://x.co/');
+});
+
+test('paymentLink: a hostile value cannot change the scheme or host', () => {
+  assert.strictEqual(link('https://x.co/?r={number}', { number: 'javascript:alert(1)' }), 'https://x.co/?r=javascript%3Aalert(1)');
+  assert.strictEqual(link('https://x.co/{number}', { number: '../..//evil.com' }), 'https://x.co/..%2F..%2F%2Fevil.com');
 });

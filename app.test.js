@@ -920,3 +920,174 @@ test('Create repeat with unsaved edits: Cancel does not mark the period done', (
   assert.ok(!t.saved()['INV-0001'].lastRepeated);
   assert.strictEqual(t.$('#invNumber').value, 'INV-0001');
 });
+
+// --- Payment details (EFT) and online payment link ---
+const EFT = { bankName: 'FNB', bankHolder: 'Jo Soap', bankAccount: '62123456789', bankBranch: '250655', bankType: 'cheque' };
+const eftText = $ => [...$('#eftRows').children].map(e => e.textContent);
+
+test('EFT block prints only filled fields and the current number as reference', () => {
+  const { $, type } = boot();
+  assert.ok($('#eftPrint').hidden);
+  type('#bankName', 'FNB');
+  type('#bankAccount', '123');
+  type('#invNumber', 'INV-0042');
+  assert.ok(!$('#eftPrint').hidden);
+  assert.deepStrictEqual(eftText($), ['Bank', 'FNB', 'Account number', '123', 'Reference', 'INV-0042']);
+  type('#invNumber', 'INV-0043');
+  assert.strictEqual(eftText($).pop(), 'INV-0043');
+  type('#bankType', 'savings');
+  assert.ok(eftText($).includes('Savings'));
+  assert.match($('#notes').placeholder, /^(?!.*bank)/i);
+});
+
+test('EFT block is hidden for quotes and credit notes and when no bank field is filled', () => {
+  const { $, type } = boot();
+  Object.entries(EFT).forEach(([k, v]) => type('#' + k, v));
+  assert.ok(!$('#eftPrint').hidden);
+  type('#docType', 'quote');
+  assert.ok($('#eftPrint').hidden);
+  type('#docType', 'credit');
+  assert.ok($('#eftPrint').hidden);
+  type('#docType', 'invoice');
+  assert.ok(!$('#eftPrint').hidden);
+  Object.keys(EFT).forEach(k => type('#' + k, ''));
+  assert.ok($('#eftPrint').hidden);
+});
+
+test('EFT settings survive New invoice, are saved with the document and old saves keep the current ones', () => {
+  const { $, d, type, saved } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } });
+  Object.entries(EFT).forEach(([k, v]) => type('#' + k, v));
+  type('#invNumber', 'INV-0002');
+  $('#saveInvoiceBtn').click();
+  Object.entries(EFT).forEach(([k, v]) => assert.strictEqual(saved()['INV-0002'][k], v));
+  $('#newInvoiceBtn').click();
+  Object.entries(EFT).forEach(([k, v]) => assert.strictEqual($('#' + k).value, v));
+  // an old save without the fields keeps the settings on screen (like fromName), so they aren't wiped
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0001')).click();
+  assert.strictEqual($('#bankName').value, 'FNB');
+  assert.ok(!$('#eftPrint').hidden);
+  // a saved invoice keeps what it was sent with even if the settings change afterwards
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0002')).click();
+  assert.strictEqual($('#bankName').value, 'FNB');
+  type('#bankName', 'Nedbank');
+  assert.strictEqual(saved()['INV-0002'].bankName, 'FNB');
+});
+
+test('Duplicate and Credit note keep the saved settings; older saves get the screen settings', () => {
+  const { $, d, type } = boot({ seed: { 'invoice-list': {
+    'INV-0001': inv('INV-0001', { bankName: 'ABSA', payLink: 'https://x.co/{number}' }), 'INV-0002': inv('INV-0002') } } });
+  type('#bankName', 'Screen Bank');
+  const open = n => [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes(n)).click();
+  open('INV-0001');
+  $('#duplicateBtn').click();
+  assert.strictEqual($('#bankName').value, 'ABSA');
+  assert.strictEqual($('#payLink').value, 'https://x.co/{number}');
+  open('INV-0002');
+  type('#bankName', 'Screen Bank');
+  $('#duplicateBtn').click();
+  assert.strictEqual($('#bankName').value, 'Screen Bank');
+});
+
+const PAY_FIXTURE = { payLink: 'https://pay.example.com/p?amt={amount}&ref={number}&cur={currency}' };
+const payTotal = () => inv('INV-0001', { items: [{ desc: 'Work', qty: '1', price: '1000' }], ...PAY_FIXTURE });
+
+test('payment link appears with the balance after a part payment and disappears when paid', () => {
+  const { $, d, type } = boot({ seed: { 'invoice-list': { 'INV-0001': payTotal() } } });
+  d.querySelector('.ledger-row').click();
+  assert.ok(!$('#payOnline').hidden);
+  assert.strictEqual($('#payOnlineLink').getAttribute('href'), 'https://pay.example.com/p?amt=1000.00&ref=INV-0001&cur=ZAR');
+  assert.strictEqual($('#payOnlineLink').getAttribute('rel'), 'noopener');
+  assert.strictEqual($('#payOnlineLink').getAttribute('target'), '_blank');
+  type('#payAmount', '400');
+  $('#addPaymentBtn').click();
+  assert.match($('#payOnlineLink').getAttribute('href'), /amt=600\.00&/);
+  type('#payAmount', '600');
+  $('#addPaymentBtn').click();
+  assert.ok($('#payOnline').hidden);
+  assert.strictEqual($('#payOnlineLink').getAttribute('href'), null);
+});
+
+test('payment link is hidden once ticked paid, and for quotes and credit notes', () => {
+  const { $, d, type } = boot({ seed: { 'invoice-list': { 'INV-0001': payTotal() } } });
+  d.querySelector('.ledger-row').click();
+  type('#paid', true);
+  assert.ok($('#payOnline').hidden);
+  type('#paid', false);
+  assert.ok(!$('#payOnline').hidden);
+  type('#docType', 'quote');
+  assert.ok($('#payOnline').hidden);
+  type('#docType', 'credit');
+  assert.ok($('#payOnline').hidden);
+});
+
+test('a javascript: / http: template (e.g. from an imported record) produces no link', () => {
+  ['javascript:alert(1)', 'http://pay.example.com/{number}', 'data:text/html,hi', 'https://paypal.me/<name>/{amount}'].forEach(payLink => {
+    const { $, d } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001', { payLink }) } } });
+    d.querySelector('.ledger-row').click();
+    assert.ok($('#payOnline').hidden, payLink);
+    assert.strictEqual($('#payOnlineLink').getAttribute('href'), null);
+    assert.strictEqual($('#payQr').children.length, 0);
+    assert.match($('#payLinkMsg').textContent, /isn’t a usable link/);
+  });
+});
+
+test('QR code is rendered inline when a link exists, and removed with it', () => {
+  const { $, d, type } = boot({ seed: { 'invoice-list': { 'INV-0001': payTotal() } } });
+  assert.strictEqual($('#payQr').children.length, 0);
+  d.querySelector('.ledger-row').click();
+  const svg = $('#payQr svg');
+  assert.ok(svg);
+  assert.ok(svg.querySelector('path').getAttribute('d').length > 100);
+  assert.ok(!$('#payQr').hidden);
+  type('#paid', true);
+  assert.strictEqual($('#payQr').children.length, 0);
+});
+
+test('link text still shows when the QR library is missing', () => {
+  const { $, d, w } = boot({ seed: { 'invoice-list': { 'INV-0001': payTotal() } } });
+  w.qrcode = undefined;
+  w.document.getElementById('payLink').value = 'https://other.example.com/{number}';
+  d.querySelector('.ledger-row').click(); // reloads the saved template; force a fresh render below
+  w.document.getElementById('payLink').value = 'https://other.example.com/{number}';
+  w.document.getElementById('payLink').dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.ok(!$('#payOnline').hidden);
+  assert.match($('#payOnlineLink').textContent, /other\.example\.com\/INV-0001/);
+  assert.strictEqual($('#payQr').children.length, 0);
+});
+
+test('PayPal preset fills the template; editing it resets the select', () => {
+  const { $, type } = boot();
+  type('#payPreset', 'paypal');
+  assert.strictEqual($('#payLink').value, 'https://paypal.me/<name>/{amount}{currency}');
+  assert.match($('#payLinkMsg').textContent, /isn’t a usable link/);
+  type('#payLink', 'https://paypal.me/jo/{amount}{currency}');
+  assert.strictEqual($('#payPreset').value, '');
+  assert.deepStrictEqual([...$('#payPreset').options].map(o => o.value), ['', 'paypal']);
+});
+
+test('Email body includes the payment link only when there is one', () => {
+  const { $, w, type } = boot();
+  let url = '';
+  w.openMail = u => { url = decodeURIComponent(u); };
+  type('#payLink', 'https://pay.example.com/{number}?a={amount}');
+  type('#invNumber', 'INV-0007');
+  type('#itemsBody .item-price', '250');
+  $('#emailBtn').click();
+  assert.match(url, /\nPay online: https:\/\/pay\.example\.com\/INV-0007\?a=250\.00\n/);
+  type('#payLink', '');
+  $('#emailBtn').click();
+  assert.doesNotMatch(url, /Pay online/);
+  type('#payLink', 'javascript:alert(1)');
+  $('#emailBtn').click();
+  assert.doesNotMatch(url, /Pay online|javascript/);
+});
+
+test('opening an old save without payment details keeps the current bank details for the next invoice', () => {
+  const { $, d, type } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } });
+  type('#bankName', 'FNB');
+  type('#bankAccount', '62123456789');
+  d.querySelector('.ledger-row').click();
+  $('#newInvoiceBtn').click();
+  assert.strictEqual($('#bankName').value, 'FNB');
+  assert.strictEqual($('#bankAccount').value, '62123456789');
+});

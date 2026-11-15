@@ -1,7 +1,17 @@
 const STORAGE_KEY = 'invoice-draft';
 
 const itemsBody = document.getElementById('itemsBody');
-const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason','repeat'];
+const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason','repeat','bankName','bankHolder','bankAccount','bankBranch','bankType','payLink'];
+
+// Business settings: they go with every document (so a saved invoice prints what it was sent with) and carry over to new ones.
+const SETTING_FIELDS = ['bankName','bankHolder','bankAccount','bankBranch','bankType','payLink'];
+
+// A new document made from saved `src` keeps src's settings; ones it lacks (older saves, or left blank) come from the screen.
+function inheritSettings(src) {
+  const out = { ...src };
+  SETTING_FIELDS.forEach(id => { if (!out[id]) out[id] = document.getElementById(id).value; });
+  return out;
+}
 
 const DOC_NAMES = { invoice: 'invoice', quote: 'quote', credit: 'credit note' };
 const docKind = () => (DOC_NAMES[document.getElementById('docType').value] ? document.getElementById('docType').value : 'invoice');
@@ -154,7 +164,8 @@ function recalc() {
   const quote = isQuote();
   const credit = isCredit();
   const credited = openInvoiceCredits();
-  showPayments(t.total, quote || credit, credited);
+  const balance = showPayments(t.total, quote || credit, credited);
+  showPaymentDetails(quote || credit ? 0 : balance);
   document.body.dataset.doc = docKind();
   // SARS: a VAT-charging invoice must be headed "Tax Invoice". A quote isn't a tax document.
   // A credit note is headed "Credit Note" with or without VAT — that's the wording SARS asks for.
@@ -168,6 +179,86 @@ function recalc() {
   document.getElementById('newInvoiceBtn').textContent = `New ${docName()}`;
   updateStamp(t.total, credited);
 }
+
+// --- Payment details: the EFT block and the online payment link (both print; the inputs don't) ---
+// The link currently on the sheet ('' when none), for the Email button.
+let payUrl = '';
+const PAYPAL_TEMPLATE = 'https://paypal.me/<name>/{amount}{currency}';
+let qrFor = '';
+
+// Inline SVG, so nothing is fetched and it prints at any size. null when the vendored encoder is missing
+// or the link is too long to encode — the link text still shows then.
+function qrSvg(text) {
+  if (typeof qrcode !== 'function') return null;
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const n = qr.getModuleCount();
+    const quiet = 4;
+    let d = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${n + quiet * 2} ${n + quiet * 2}`);
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('aria-hidden', 'true');
+    const bg = document.createElementNS(ns, 'rect');
+    bg.setAttribute('width', '100%');
+    bg.setAttribute('height', '100%');
+    bg.setAttribute('fill', '#fff');
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', '#000');
+    svg.append(bg, path);
+    return svg;
+  } catch { return null; }
+}
+
+// `balance` is what's still owed on an invoice (0 for quotes and credit notes, which show neither block's link).
+function showPaymentDetails(balance) {
+  const rows = isQuote() || isCredit() ? [] : eftRows(
+    Object.fromEntries(SETTING_FIELDS.map(id => [id, document.getElementById(id).value])),
+    document.getElementById('invNumber').value);
+  document.getElementById('eftPrint').hidden = !rows.length;
+  document.getElementById('eftRows').replaceChildren(...rows.flatMap(([label, value]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    return [dt, dd];
+  }));
+
+  const template = document.getElementById('payLink').value;
+  const url = balance > 0 ? paymentLink(template, {
+    amount: balance, number: document.getElementById('invNumber').value, currency: document.getElementById('currency').value,
+  }) : '';
+  payUrl = url;
+  document.getElementById('payLinkMsg').textContent = template.trim() && !paymentLink(template, { amount: 1, number: 'X', currency: 'ZAR' })
+    ? 'That isn’t a usable link. It must be a full https:// address with no spaces or <placeholders>.' : '';
+  document.getElementById('payPreset').value = template === PAYPAL_TEMPLATE ? 'paypal' : '';
+  const box = document.getElementById('payOnline');
+  box.hidden = !url;
+  const anchor = document.getElementById('payOnlineLink');
+  anchor.textContent = url;
+  if (url) anchor.setAttribute('href', url); else anchor.removeAttribute('href');
+  if (qrFor !== url) {
+    qrFor = url;
+    const svg = url ? qrSvg(url) : null;
+    document.getElementById('payQr').replaceChildren(...(svg ? [svg] : []));
+  }
+  document.getElementById('payQr').hidden = !url || !document.getElementById('payQr').firstChild;
+}
+
+// Picking a preset fills the template; PayPal's needs the user's own name, so select that part.
+document.getElementById('payPreset').addEventListener('input', (e) => {
+  if (e.target.value !== 'paypal') return;
+  const input = document.getElementById('payLink');
+  input.value = PAYPAL_TEMPLATE;
+  input.focus();
+  const at = PAYPAL_TEMPLATE.indexOf('<name>');
+  try { input.setSelectionRange(at, at + 6); } catch {}
+});
 
 // Sum of saved credit notes against the saved invoice that's open (0 for drafts, quotes and credit notes).
 function openInvoiceCredits() {
@@ -197,6 +288,8 @@ function collectData() {
 
 function applyData(data) {
   data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', creditReason: '', repeat: '', lastRepeated: '', ...data }; // saves from before quotes / discounts / quote status / credit notes / repeats existed
+  // No defaults for SETTING_FIELDS: a save from before payment details keeps the ones on screen, like fromName,
+  // so opening an old invoice and pressing New doesn't wipe the user's bank details.
   fields.forEach(id => {
     const el = document.getElementById(id);
     // Missing checkbox = unchecked, so older saves without `paid` don't inherit the previous invoice's tick.
@@ -274,12 +367,16 @@ document.getElementById('emailBtn').addEventListener('click', () => {
     '',
     `Please find attached ${doc} ${num} for ${total}${against}${due ? `, ${doc === 'quote' ? 'valid until' : 'due'} ${due}` : ''}.`,
     '',
+    ...(payUrl ? [`Pay online: ${payUrl}`, ''] : []),
     'Kind regards,',
     business,
   ].join('\n');
 
-  window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  openMail(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
 });
+
+// Its own function so tests can intercept the navigation.
+function openMail(url) { window.location.href = url; }
 
 // --- PDF filename (browser print/save-as-PDF uses the document title) ---
 const APP_TITLE = document.title;
@@ -361,7 +458,7 @@ function startCreditNote(num) {
   const original = list[num];
   if (!original || !confirmDiscard('Start a credit note')) return false;
   applyData({
-    ...original,
+    ...inheritSettings(original),
     docType: 'credit',
     invNumber: nextFreeNumber(list, 'credit'),
     invDate: localISODate(new Date()),
@@ -583,7 +680,7 @@ function startCopy(src, date) {
   // Custom terms have no fixed days, so keep the gap between the original's date and due date.
   const gap = src.invDate && src.dueDate ? Math.round((new Date(src.dueDate) - new Date(src.invDate)) / 86400000) : NaN;
   applyData({
-    ...src, invNumber, invDate: date,
+    ...inheritSettings(src), invNumber, invDate: date,
     dueDate: src.terms === 'custom' && type !== 'quote' && Number.isFinite(gap) ? addDays(date, gap) : '',
     paid: false, quoteStatus: '', payments: [], creditFor: '', creditReason: '', repeat: '', lastRepeated: '',
   });
@@ -776,7 +873,9 @@ function showPayments(total, noPayments, credited = 0) {
   document.getElementById('paidAmount').textContent = money(-received);
   document.getElementById('creditedAmount').textContent = money(-credited);
   // Ticking "Paid" settles the invoice outright, so it shouldn't print a balance as well.
-  document.getElementById('balanceAmount').textContent = money(fullyPaid ? 0 : balanceDue(total, received ? payments : [], credited));
+  const balance = fullyPaid ? 0 : balanceDue(total, received ? payments : [], credited);
+  document.getElementById('balanceAmount').textContent = money(balance);
+  return balance;
 }
 
 function renderPayments() {
