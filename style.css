@@ -204,6 +204,12 @@ button:disabled { cursor: default; }
 .rail-tools { display: flex; align-items: center; gap: 2px; margin: 0 -8px 12px; flex-wrap: wrap; }
 .rail-tools .btn { height: 34px; padding: 0 8px; font-size: 13px; }
 .rail-tools .icon-btn { width: 34px; padding: 0; margin-left: auto; }
+.zoho-help { position: relative; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; color: var(--muted); max-width: 34ch; }
+.zoho-help p { margin: 0 0 6px; }
+.zoho-help strong { color: var(--ink); }
+.zoho-help ol { margin: 0 0 6px; padding-left: 18px; }
+.zoho-help li { margin-bottom: 3px; }
+.zoho-help .btn { position: absolute; top: 4px; right: 4px; height: 28px; padding: 0 8px; font-size: 12px; }
 .footnote { font-size: 12px; color: var(--muted); margin: 0 0 6px; max-width: 34ch; }
 .footnote a { color: inherit; }
 .footnote a:hover { color: var(--ink); }

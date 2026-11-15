@@ -837,3 +837,34 @@ test('old saves without repeat fields open cleanly', () => {
   $('#saveInvoiceBtn').click();
   assert.strictEqual(w.alerts.length, 0);
 });
+
+test('Export for Zoho Books: downloads only the invoices the ledger lists', async () => {
+  const { w, d, $, type } = boot({ seed: { 'invoice-list': {
+    'INV-0001': inv('INV-0001', { paid: true }), 'INV-0002': inv('INV-0002'),
+    'QUO-0001': inv('QUO-0001', { docType: 'quote' }),
+  } } });
+  let blob; const clicks = [];
+  w.URL.createObjectURL = b => { blob = b; return 'blob:x'; };
+  w.URL.revokeObjectURL = () => {};
+  w.HTMLAnchorElement.prototype.click = function () { clicks.push(this.download); };
+  assert.ok($('#zohoHelp').hidden);
+  type('#ledgerFilter', 'unpaid');
+  $('#zohoBtn').click();
+  assert.deepStrictEqual(clicks, [`zoho-invoices-${localISODate(new Date())}.csv`]);
+  const text = await new Promise(res => { const r = new w.FileReader(); r.onload = () => res(r.result); r.readAsText(blob); });
+  assert.ok(text.includes('INV-0002') && !text.includes('INV-0001') && !text.includes('QUO-0001'));
+  assert.ok(!$('#zohoHelp').hidden);
+  $('#zohoHelpClose').click();
+  assert.ok($('#zohoHelp').hidden);
+});
+
+test('Export for Zoho Books: alerts and downloads nothing when no invoices are listed', () => {
+  const { w, $, type } = boot({ seed: { 'invoice-list': { 'QUO-0001': inv('QUO-0001', { docType: 'quote' }) } } });
+  let made = 0;
+  w.URL.createObjectURL = () => { made++; return 'blob:x'; };
+  type('#ledgerFilter', 'quote');
+  $('#zohoBtn').click();
+  assert.strictEqual(made, 0);
+  assert.strictEqual(w.alerts.length, 1);
+  assert.ok($('#zohoHelp').hidden);
+});

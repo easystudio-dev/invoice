@@ -244,4 +244,80 @@ function dueRepeats(list, today) {
     .sort((a, b) => a.date.localeCompare(b.date) || a.num.localeCompare(b.num));
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats };
+// One CSV cell, RFC 4180: quoted when it holds a comma, quote, CR or LF, inner quotes doubled.
+// Numbers are written as they are; text that a spreadsheet would run as a formula (= + - @, tab or CR first)
+// gets a leading ' so it opens as plain text.
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// rows: array of arrays (header first). CRLF line endings, UTF-8 BOM so Excel reads accents and rand signs right.
+function toCSV(rows) {
+  return '﻿' + rows.map(r => r.map(csvEscape).join(',')).join('\r\n') + '\r\n';
+}
+
+// Zoho Books' invoice import column names, from its own sample file (books.zoho.com/common/import/sample_invoices.csv).
+// 'Product Type' isn't in that sample; Zoho ignores a column you don't map.
+const ZOHO_INVOICE_HEADERS = ['Invoice Date', 'Invoice Number', 'Invoice Status', 'Customer Name', 'Due Date',
+  'Currency Code', 'Item Name', 'Item Desc', 'Product Type', 'Quantity', 'Item Price', 'Discount Type',
+  'Entity Discount Percent', 'Entity Discount Amount', 'Is Discount Before Tax', 'Is Inclusive Tax',
+  'Item Tax1', 'Item Tax1 Type', 'Item Tax1 %', 'Notes', 'Terms & Conditions'];
+
+// A plain decimal for a number column: dot, no grouping, no exponent. '' when blank or not a number.
+function csvNumber(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? +n.toFixed(6) : '';
+}
+
+// Zoho keeps only the name, description, quantity and rate of a line (it drops the unit), so the first line of
+// the description is the item name (max 100 chars, the overflow moves to the description) and the rest of the
+// description plus "(qty unit)" is the description.
+function zohoItemText(item) {
+  const lines = String(item.desc || '').split(/\r?\n/).map(l => l.trim());
+  const first = lines.shift() || '';
+  const name = first.slice(0, 100) || 'Item';
+  const rest = [first.slice(100).trim(), ...lines].join('\n').trim();
+  const unit = String(item.unit || '').trim();
+  const suffix = unit ? `(${csvNumber(item.qty) === '' ? item.qty : csvNumber(item.qty)} ${unit})` : '';
+  return { name, desc: [rest, suffix].filter(Boolean).join(rest ? ' ' : '') };
+}
+
+// Header + one row per line of each saved invoice in `numbers` (quotes and credit notes are skipped).
+// Invoice-level columns repeat on every row. Status is always Draft: payments aren't part of this import.
+// The discount is an entity-level one, before tax. Tax columns only when VAT is on: standard lines carry the
+// rate, zero-rated lines 0, exempt lines no tax at all.
+function zohoInvoiceRows(list, numbers, taxName = 'VAT') {
+  const rows = [ZOHO_INVOICE_HEADERS];
+  numbers.forEach(num => {
+    const doc = list[num];
+    if (!doc || (doc.docType || 'invoice') !== 'invoice') return;
+    const vatOn = !!doc.vatToggle;
+    const rate = csvNumber(doc.vatRate) || 0;
+    const items = Array.isArray(doc.items) ? doc.items : [];
+    const subtotal = invoiceTotals(items, 0).subtotal;
+    const value = Math.max(0, parseFloat(doc.discountValue) || 0);
+    const amount = doc.discountType === 'amount';
+    const off = value > 0 ? (amount ? discountAmount(subtotal, { type: 'amount', value }) : Math.min(value, 100)) : '';
+    items.forEach(item => {
+      const { name, desc } = zohoItemText(item);
+      const cat = vatCategory(item);
+      const taxed = vatOn && cat !== 'exempt';
+      rows.push([
+        doc.invDate || '', doc.invNumber || num, 'Draft', doc.toName || '', doc.dueDate || '',
+        doc.currency || 'ZAR', name, desc, 'services', csvNumber(item.qty), csvNumber(item.price),
+        off === '' ? '' : 'entity_level',
+        off !== '' && !amount ? off : '', off !== '' && amount ? off : '', off === '' ? '' : 'true',
+        vatOn ? String(!!doc.vatInclusive) : '',
+        taxed ? taxName : '', taxed ? 'ItemAmount' : '', taxed ? (cat === 'zero' ? 0 : rate) : '',
+        doc.notes || '', doc.terms || '',
+      ]);
+    });
+  });
+  return rows;
+}
+
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS };

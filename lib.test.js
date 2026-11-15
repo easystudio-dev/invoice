@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS } = require('./lib.js');
 
 // The fields invoiceTotals returned before VAT categories existed (it now also returns `categories`).
 const legacy = ({ lineTotals, subtotal, discount, net, vat, total }) => ({ lineTotals, subtotal, discount, net, vat, total });
@@ -488,4 +488,92 @@ test('dueRepeats: only repeats whose date has come, oldest first', () => {
     { num: 'INV-1', date: '2026-10-20' }, { num: 'INV-2', date: '2026-11-10' },
   ]);
   assert.deepStrictEqual(dueRepeats(list, '2026-11-20').map(r => r.num), ['INV-1', 'INV-2', 'INV-5']);
+});
+
+test('csvEscape: quotes fields with comma, quote, CR or LF and doubles inner quotes', () => {
+  assert.strictEqual(csvEscape('plain'), 'plain');
+  assert.strictEqual(csvEscape('a,b'), '"a,b"');
+  assert.strictEqual(csvEscape('say "hi"'), '"say ""hi"""');
+  assert.strictEqual(csvEscape('l1\nl2'), '"l1\nl2"');
+  assert.strictEqual(csvEscape('l1\r\nl2'), '"l1\r\nl2"');
+  assert.strictEqual(csvEscape(null), '');
+  assert.strictEqual(csvEscape(undefined), '');
+});
+
+test('toCSV: BOM, CRLF line endings, trailing CRLF', () => {
+  const out = toCSV([['a', 'b'], ['1,5', 2]]);
+  assert.strictEqual(out, '﻿a,b\r\n"1,5",2\r\n');
+});
+
+test('csvEscape: formula-injection guard on text, not on numbers', () => {
+  for (const s of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx']) assert.strictEqual(csvEscape(s), "'" + s);
+  assert.strictEqual(csvEscape('\rx'), '"\'\rx"');
+  assert.strictEqual(csvEscape(-50), '-50');
+  assert.strictEqual(csvEscape('2026-01-02'), '2026-01-02');
+  assert.strictEqual(csvEscape('=a,b'), '"\'=a,b"');
+});
+
+test('zohoItemText: first line is the name, rest plus (qty unit) is the description', () => {
+  assert.deepStrictEqual(zohoItemText({ desc: 'Homepage layout', qty: '1.5', unit: 'hrs' }), { name: 'Homepage layout', desc: '(1.5 hrs)' });
+  assert.deepStrictEqual(zohoItemText({ desc: '  Logo \n Three concepts\nTwo rounds', qty: '1' }), { name: 'Logo', desc: 'Three concepts\nTwo rounds' });
+  assert.deepStrictEqual(zohoItemText({ desc: 'Logo\nConcepts', qty: '2', unit: 'pcs' }), { name: 'Logo', desc: 'Concepts (2 pcs)' });
+  assert.strictEqual(zohoItemText({ desc: '' }).name, 'Item');
+});
+
+test('zohoItemText: name capped at 100 chars, overflow moves to the description', () => {
+  const long = 'x'.repeat(130);
+  const t = zohoItemText({ desc: long + '\nmore', qty: '1' });
+  assert.strictEqual(t.name, 'x'.repeat(100));
+  assert.strictEqual(t.desc, 'x'.repeat(30) + '\nmore');
+});
+
+const zInv = (extra = {}) => ({ docType: 'invoice', invNumber: 'INV-1', invDate: '2026-11-01', dueDate: '2026-11-30', toName: 'Acme, Ltd', currency: 'ZAR',
+  notes: 'Thanks', terms: '30 days', vatToggle: false, vatRate: '15', items: [{ desc: 'A', qty: '2', price: '50' }], ...extra });
+const col = (rows, name) => rows.slice(1).map(r => r[ZOHO_INVOICE_HEADERS.indexOf(name)]);
+
+test('zohoInvoiceRows: one row per line, invoice columns repeated, Draft and services', () => {
+  const list = { 'INV-1': zInv({ items: [{ desc: 'Homepage layout', qty: '1.5', unit: 'hrs', price: '400' }, { desc: 'Hosting', qty: '1', price: '99.5' }] }) };
+  const rows = zohoInvoiceRows(list, ['INV-1']);
+  assert.deepStrictEqual(rows[0], ZOHO_INVOICE_HEADERS);
+  assert.strictEqual(rows.length, 3);
+  assert.deepStrictEqual(col(rows, 'Invoice Number'), ['INV-1', 'INV-1']);
+  assert.deepStrictEqual(col(rows, 'Customer Name'), ['Acme, Ltd', 'Acme, Ltd']);
+  assert.deepStrictEqual(col(rows, 'Invoice Status'), ['Draft', 'Draft']);
+  assert.deepStrictEqual(col(rows, 'Product Type'), ['services', 'services']);
+  assert.deepStrictEqual(col(rows, 'Invoice Date'), ['2026-11-01', '2026-11-01']);
+  assert.deepStrictEqual(col(rows, 'Item Desc'), ['(1.5 hrs)', '']);
+  assert.deepStrictEqual(col(rows, 'Quantity'), [1.5, 1]);
+  assert.deepStrictEqual(col(rows, 'Item Price'), [400, 99.5]);
+  assert.deepStrictEqual(col(rows, 'Notes'), ['Thanks', 'Thanks']);
+});
+
+test('zohoInvoiceRows: quotes and credit notes excluded; negative price stays a number', () => {
+  const list = { 'INV-1': zInv({ items: [{ desc: 'Refund', qty: '1', price: '-50' }] }), 'QUO-1': zInv({ docType: 'quote' }), 'CN-1': zInv({ docType: 'credit' }) };
+  const rows = zohoInvoiceRows(list, ['INV-1', 'QUO-1', 'CN-1']);
+  assert.strictEqual(rows.length, 2);
+  assert.ok(toCSV(rows).includes(',-50,'));
+});
+
+test('zohoInvoiceRows: percent vs amount discount, none empty', () => {
+  const pct = zohoInvoiceRows({ a: zInv({ discountType: 'percent', discountValue: '10' }) }, ['a']);
+  assert.deepStrictEqual([col(pct, 'Discount Type')[0], col(pct, 'Entity Discount Percent')[0], col(pct, 'Entity Discount Amount')[0], col(pct, 'Is Discount Before Tax')[0]], ['entity_level', 10, '', 'true']);
+  const amt = zohoInvoiceRows({ a: zInv({ discountType: 'amount', discountValue: '30' }) }, ['a']);
+  assert.deepStrictEqual([col(amt, 'Entity Discount Percent')[0], col(amt, 'Entity Discount Amount')[0]], ['', 30]);
+  const capped = zohoInvoiceRows({ a: zInv({ discountType: 'amount', discountValue: '5000' }) }, ['a']);
+  assert.strictEqual(col(capped, 'Entity Discount Amount')[0], 100);
+  const none = zohoInvoiceRows({ a: zInv() }, ['a']);
+  assert.deepStrictEqual([col(none, 'Discount Type')[0], col(none, 'Entity Discount Percent')[0], col(none, 'Is Discount Before Tax')[0]], ['', '', '']);
+});
+
+test('zohoInvoiceRows: VAT off has no tax columns; on has standard, zero and exempt lines', () => {
+  const off = zohoInvoiceRows({ a: zInv() }, ['a']);
+  assert.deepStrictEqual([col(off, 'Item Tax1')[0], col(off, 'Item Tax1 %')[0], col(off, 'Is Inclusive Tax')[0]], ['', '', '']);
+  const items = [{ desc: 'S', qty: '1', price: '1' }, { desc: 'Z', qty: '1', price: '1', vatCat: 'zero' }, { desc: 'E', qty: '1', price: '1', vatCat: 'exempt' }];
+  const on = zohoInvoiceRows({ a: zInv({ vatToggle: true, items }) }, ['a']);
+  assert.deepStrictEqual(col(on, 'Item Tax1'), ['VAT', 'VAT', '']);
+  assert.deepStrictEqual(col(on, 'Item Tax1 %'), [15, 0, '']);
+  assert.deepStrictEqual(col(on, 'Item Tax1 Type'), ['ItemAmount', 'ItemAmount', '']);
+  assert.deepStrictEqual(col(on, 'Is Inclusive Tax'), ['false', 'false', 'false']);
+  const inc = zohoInvoiceRows({ a: zInv({ vatToggle: true, vatInclusive: true }) }, ['a']);
+  assert.strictEqual(col(inc, 'Is Inclusive Tax')[0], 'true');
 });

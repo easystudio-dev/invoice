@@ -687,6 +687,23 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
+// Zoho Books invoice import: exactly the invoices the ledger lists right now (search + status filter).
+document.getElementById('zohoBtn').addEventListener('click', () => {
+  const list = getSavedList();
+  const today = localISODate(new Date());
+  const numbers = Object.keys(list).sort().reverse()
+    .filter(num => ledgerMatches(list, num, today, ledgerSearch.value, ledgerFilterEl.value))
+    .filter(num => (list[num].docType || 'invoice') === 'invoice');
+  if (!numbers.length) { alert('There are no invoices in the list to export. Quotes and credit notes aren’t included; check the search and filter.'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([toCSV(zohoInvoiceRows(list, numbers))], { type: 'text/csv;charset=utf-8' }));
+  a.download = `zoho-invoices-${today}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  document.getElementById('zohoHelp').hidden = false;
+});
+document.getElementById('zohoHelpClose').addEventListener('click', () => { document.getElementById('zohoHelp').hidden = true; });
+
 const importInput = document.getElementById('importInput');
 document.getElementById('importBtn').addEventListener('click', () => importInput.click());
 importInput.addEventListener('change', async () => {

@@ -252,6 +252,7 @@
     <div class="rail-tools">
       <button id="exportBtn" type="button" class="btn btn-quiet" title="Download all saved invoices as a backup file">Export backup</button>
       <button id="importBtn" type="button" class="btn btn-quiet" title="Restore saved invoices from a backup file">Import backup</button>
+      <button id="zohoBtn" type="button" class="btn btn-quiet" title="Download the listed invoices as a CSV for Zoho Books’ invoice import">Export for Zoho Books</button>
       <input id="importInput" type="file" accept="application/json,.json" class="visually-hidden" tabindex="-1" aria-hidden="true">
       <button id="themeToggle" type="button" class="btn btn-quiet icon-btn" aria-label="Dark mode" aria-pressed="false" title="Toggle dark mode">
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
@@ -262,6 +263,18 @@
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/>
         </svg>
       </button>
+    </div>
+    <div id="zohoHelp" class="zoho-help" hidden>
+      <button id="zohoHelpClose" type="button" class="btn btn-quiet" aria-label="Dismiss Zoho Books import help">Dismiss</button>
+      <p><strong>Import into Zoho Books</strong></p>
+      <ol>
+        <li>In Zoho Books go to Sales → Invoices → ⋯ → Import Invoices.</li>
+        <li>Choose the file you just downloaded.</li>
+        <li>On the next screen untick “Auto-generate invoice numbers” to keep your numbers.</li>
+        <li>Let it match customers by name. Create any missing customers in Zoho first, or turn on the option to create them if you see it.</li>
+        <li>Check Map Fields, then import.</li>
+      </ol>
+      <p>Invoices come in as drafts. Payments and credit notes aren’t included. If VAT is on, Zoho needs a tax named “VAT” set up (it can’t be used if your organisation isn’t VAT-registered).</p>
     </div>
     <p class="footnote">Everything stays in this browser — no account, nothing uploaded. Clearing your browser data deletes your invoices, so export a backup now and then.</p>
     <p class="footnote">Made by <a href="https://www.easystudio.co.za" target="_blank" rel="noopener">EasyStudio</a></p>
