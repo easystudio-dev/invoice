@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { boot, inv } = require('./test-helpers.js');
+const { localISODate, addDays, addMonths } = require('./lib.js');
 
 test('app starts when the browser blocks storage', () => {
   const { $, d } = boot({ blockStorage: true });
@@ -602,5 +603,237 @@ test('old saved invoice without credit fields opens cleanly', () => {
   assert.ok(!$('#creditNoteBtn').hidden && !$('#dueRow').hidden);
   assert.strictEqual($('.doc-title').textContent, 'INVOICE');
   assert.strictEqual(d.querySelector('.ledger-status').textContent, '');
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+// --- Ledger tools ---
+const TODAY = localISODate(new Date());
+const ago = n => addDays(TODAY, -n);
+const rowNums = d => [...d.querySelectorAll('.ledger-row .ledger-num')].map(e => e.textContent);
+
+// One of each kind: unpaid, overdue, part paid, paid, quote, credit note.
+function mixedLedger() {
+  return {
+    'INV-0001': inv('INV-0001', { toName: 'Acme Ltd', dueDate: addDays(TODAY, 5), items: [{ desc: 'Logo design', qty: '1', price: '100' }] }),
+    'INV-0002': inv('INV-0002', { toName: 'Bravo', dueDate: ago(3), items: [{ desc: 'Hosting', qty: '1', price: '250' }] }),
+    'INV-0003': inv('INV-0003', { toName: 'Charlie', dueDate: addDays(TODAY, 5), payments: [{ date: TODAY, amount: '40' }] }),
+    'INV-0004': inv('INV-0004', { toName: 'Delta', paid: true }),
+    'QUO-0001': inv('QUO-0001', { docType: 'quote', toName: 'Echo' }),
+    'CN-0001': inv('CN-0001', { docType: 'credit', toName: 'Acme Ltd', creditFor: 'INV-0001', creditReason: 'x', items: [{ qty: '1', price: '10' }] }),
+  };
+}
+const ledgerBoot = (list = mixedLedger(), opts = {}) => boot({ ...opts, seed: { 'invoice-list': list, ...(opts.seed || {}) } });
+
+test('ledger search matches number, client and line description, ignoring case', () => {
+  const { $, d, type } = ledgerBoot();
+  type('#ledgerSearch', 'bRaVo');
+  assert.deepStrictEqual(rowNums(d), ['INV-0002']);
+  type('#ledgerSearch', 'logo DESIGN');
+  assert.deepStrictEqual(rowNums(d), ['INV-0001']);
+  type('#ledgerSearch', 'quo-0001');
+  assert.deepStrictEqual(rowNums(d), ['QUO-0001']);
+  type('#ledgerSearch', '');
+  assert.strictEqual(rowNums(d).length, 6);
+  assert.ok($('#ledgerNoMatch').hidden);
+});
+
+test('each status filter shows the right documents', () => {
+  const { $, d, type } = ledgerBoot();
+  const expect = { unpaid: ['INV-0003', 'INV-0002', 'INV-0001'], overdue: ['INV-0002'], part: ['INV-0003'], paid: ['INV-0004'],
+    quote: ['QUO-0001'], credit: ['CN-0001'], all: ['QUO-0001', 'INV-0004', 'INV-0003', 'INV-0002', 'INV-0001', 'CN-0001'] };
+  for (const [filter, nums] of Object.entries(expect)) {
+    type('#ledgerFilter', filter);
+    assert.deepStrictEqual(rowNums(d), nums, filter);
+  }
+  type('#ledgerFilter', 'overdue');
+  type('#ledgerSearch', 'acme');
+  assert.deepStrictEqual(rowNums(d), []); // filter and search combine
+});
+
+test('ledger controls are labelled and the count is a polite live region', () => {
+  const { $, type } = ledgerBoot();
+  assert.ok($('#ledgerSearch').getAttribute('aria-label'));
+  assert.ok($('#ledgerFilter').getAttribute('aria-label'));
+  assert.strictEqual($('#ledgerShown').getAttribute('role'), 'status');
+  assert.strictEqual($('#ledgerShown').getAttribute('aria-live'), 'polite');
+  assert.strictEqual($('#ledgerShown').textContent, '6 of 6 shown');
+  type('#ledgerFilter', 'unpaid');
+  assert.strictEqual($('#ledgerShown').textContent, '3 of 6 shown');
+  type('#ledgerSearch', 'acme');
+  assert.strictEqual($('#ledgerShown').textContent, '1 of 6 shown');
+});
+
+test('no matches shows its own message, distinct from the empty ledger', () => {
+  const { $, type } = ledgerBoot();
+  type('#ledgerSearch', 'zzz');
+  assert.ok(!$('#ledgerNoMatch').hidden);
+  assert.ok($('#ledgerEmpty').hidden);
+  assert.strictEqual($('#ledgerShown').textContent, '0 of 6 shown');
+  const empty = boot();
+  assert.ok(!empty.$('#ledgerEmpty').hidden);
+  assert.ok(empty.$('#ledgerNoMatch').hidden && empty.$('#ledgerTools').hidden);
+});
+
+test('the chosen filter is remembered across a reload, the search text is not', () => {
+  const first = ledgerBoot();
+  first.type('#ledgerFilter', 'overdue');
+  first.type('#ledgerSearch', 'bravo');
+  const seed = {};
+  for (let i = 0; i < first.w.localStorage.length; i++) {
+    const k = first.w.localStorage.key(i);
+    seed[k] = first.w.localStorage.getItem(k);
+  }
+  const second = boot({ seed });
+  assert.strictEqual(second.$('#ledgerFilter').value, 'overdue');
+  assert.strictEqual(second.$('#ledgerSearch').value, '');
+  assert.deepStrictEqual(rowNums(second.d), ['INV-0002']);
+  const junk = boot({ seed: { 'invoice-list': mixedLedger(), 'invoice-ledger-filter': 'bogus' } });
+  assert.strictEqual(junk.$('#ledgerFilter').value, 'all');
+});
+
+test('totals show outstanding and overdue, credits reduce balances, quotes and credit notes are left out', () => {
+  const { $, d } = ledgerBoot();
+  // Unpaid: INV-0001 100 less 10 credited = 90, INV-0002 250 (overdue), INV-0003 100 less 40 paid = 60.
+  const lines = [...d.querySelectorAll('#ledgerTotals .totals-line')].map(l => l.textContent.replace(/\s+/g, ' '));
+  assert.strictEqual(lines.length, 2);
+  assert.match(lines[0], /^Outstanding \(3\)/);
+  assert.match(lines[0], /400[.,]00$/);
+  assert.match(lines[1], /^Overdue \(1\)/);
+  assert.match(lines[1], /250[.,]00$/);
+  assert.ok(!$('#ledgerTotals').hidden);
+  assert.ok(boot().$('#ledgerTotals').hidden);
+});
+
+test('totals are grouped by currency, naming each only when there is more than one', () => {
+  const list = { 'INV-0001': inv('INV-0001'), 'INV-0002': inv('INV-0002', { currency: 'USD' }) };
+  const text = [...ledgerBoot(list).d.querySelectorAll('#ledgerTotals .totals-label')].map(e => e.textContent);
+  assert.deepStrictEqual(text, ['USD · Outstanding (1)', 'USD · Overdue', 'ZAR · Outstanding (1)', 'ZAR · Overdue']);
+});
+
+function openRow(d, num) { [...d.querySelectorAll('.ledger-row')].find(r => r.querySelector('.ledger-num').textContent === num).click(); }
+
+test('Duplicate copies the document, clears payments, paid and status, and announces it', () => {
+  const src = inv('INV-0003', {
+    toName: 'Acme', toDetails: '1 Main Rd', toEmail: 'a@x.co', notes: 'Bank: X', currency: 'USD', terms: '14',
+    invDate: ago(40), dueDate: ago(26), paid: true, vatToggle: true, vatRate: '15', discountType: 'amount', discountValue: '5',
+    payments: [{ date: ago(2), amount: '50', note: 'EFT' }], repeat: 'monthly', lastRepeated: ago(10),
+    items: [{ desc: 'Build', qty: '2', unit: 'hrs', price: '60', vatCat: 'zero' }],
+  });
+  const { $, d, w, saved } = boot({ seed: { 'invoice-list': { 'INV-0003': src, 'INV-0008': inv('INV-0008') } } });
+  assert.ok($('#duplicateBtn').hidden);
+  openRow(d, 'INV-0003');
+  assert.ok(!$('#duplicateBtn').hidden);
+  $('#duplicateBtn').click();
+  assert.strictEqual($('#invNumber').value, 'INV-0009');
+  assert.strictEqual($('#invDate').value, TODAY);
+  assert.strictEqual($('#dueDate').value, addDays(TODAY, 14));
+  assert.strictEqual($('#toName').value, 'Acme');
+  assert.strictEqual($('#toEmail').value, 'a@x.co');
+  assert.strictEqual($('#notes').value, 'Bank: X');
+  assert.strictEqual($('#currency').value, 'USD');
+  assert.strictEqual($('#discountValue').value, '5');
+  assert.ok($('#vatToggle').checked);
+  assert.strictEqual($('.item-desc').value, 'Build');
+  assert.strictEqual($('.item-qty').value, '2');
+  assert.strictEqual($('.item-vatcat').value, 'zero');
+  assert.ok(!$('#paid').checked);
+  assert.strictEqual($('#paymentList').children.length, 0);
+  assert.strictEqual($('#repeat').value, '');
+  assert.ok($('#repeatWrap').hidden && $('#duplicateBtn').hidden && $('#deleteInvoiceBtn').hidden);
+  assert.strictEqual($('#saveStatus').textContent, 'Duplicated INV-0003 as INV-0009. Press Save to keep it.');
+  assert.strictEqual(d.activeElement, $('#saveInvoiceBtn'));
+  assert.strictEqual(saved()['INV-0009'], undefined); // unsaved until Save
+  $('#saveInvoiceBtn').click();
+  const copy = saved()['INV-0009'];
+  assert.deepStrictEqual([copy.paid, copy.payments, copy.quoteStatus, copy.repeat, copy.lastRepeated], [false, [], '', '', '']);
+  assert.strictEqual(saved()['INV-0003'].paid, true); // original untouched
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('Duplicate of a quote stays a quote with a fresh status and a 30-day validity', () => {
+  const quote = inv('QUO-0001', { docType: 'quote', quoteStatus: 'accepted' });
+  const { $, d } = boot({ seed: { 'invoice-list': { 'QUO-0001': quote } } });
+  openRow(d, 'QUO-0001');
+  $('#duplicateBtn').click();
+  assert.strictEqual($('#docType').value, 'quote');
+  assert.strictEqual($('#invNumber').value, 'QUO-0002');
+  assert.strictEqual($('#quoteStatus').value, '');
+  assert.strictEqual($('#dueDate').value, addDays(TODAY, 30));
+});
+
+test('Duplicate is hidden for credit notes', () => {
+  const { $, d } = ledgerBoot();
+  openRow(d, 'CN-0001');
+  assert.ok($('#duplicateBtn').hidden);
+  assert.ok($('#repeatWrap').hidden);
+  openRow(d, 'INV-0001');
+  assert.ok(!$('#duplicateBtn').hidden);
+});
+
+test('Repeats select is saved on the invoice and shows for saved invoices only', () => {
+  const { $, d, type, saved } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001', { invDate: TODAY }) } } });
+  assert.ok($('#repeatWrap').hidden);
+  openRow(d, 'INV-0001');
+  assert.ok(!$('#repeatWrap').hidden);
+  assert.strictEqual($('#repeat').value, '');
+  type('#repeat', 'monthly');
+  assert.strictEqual(saved()['INV-0001'].repeat, 'monthly');
+  type('#repeat', '');
+  assert.strictEqual(saved()['INV-0001'].repeat, '');
+});
+
+test('a due repeating invoice shows a notice; Create makes the dated invoice and the notice goes', () => {
+  const start = addMonths(TODAY, -2); // next period was a month ago
+  const list = {
+    'INV-0005': inv('INV-0005', { toName: 'Retainer Co', invDate: start, dueDate: addDays(start, 7), terms: '7', repeat: 'monthly', paid: true, payments: [{ amount: '100' }] }),
+    'INV-0006': inv('INV-0006', { invDate: addMonths(TODAY, -1) }), // not repeating
+    'INV-0007': inv('INV-0007', { invDate: TODAY, repeat: 'monthly' }), // next one is in a month
+  };
+  const { $, d, w, saved } = boot({ seed: { 'invoice-list': list } });
+  assert.ok(!$('#repeatDue').hidden);
+  const notes = [...d.querySelectorAll('#repeatList li')];
+  assert.strictEqual(notes.length, 1);
+  assert.match(notes[0].textContent, /INV-0005 · Retainer Co/);
+  assert.strictEqual(saved()['INV-0005'].lastRepeated, undefined); // nothing happens on load
+  assert.strictEqual(Object.keys(saved()).length, 3);
+  notes[0].querySelector('button').click();
+  const scheduled = addMonths(start, 1);
+  assert.strictEqual($('#invNumber').value, 'INV-0008');
+  assert.strictEqual($('#invDate').value, scheduled);
+  assert.strictEqual($('#dueDate').value, addDays(scheduled, 7));
+  assert.strictEqual($('#toName').value, 'Retainer Co');
+  assert.ok(!$('#paid').checked);
+  assert.strictEqual($('#paymentList').children.length, 0);
+  assert.strictEqual($('#repeat').value, '');
+  assert.match($('#saveStatus').textContent, /^Created INV-0008 from INV-0005, dated .*Press Save to keep it\.$/);
+  assert.strictEqual(saved()['INV-0005'].lastRepeated, scheduled);
+  assert.strictEqual(saved()['INV-0005'].paid, true); // source otherwise untouched
+  assert.strictEqual(d.activeElement, $('#saveInvoiceBtn'));
+  // The period after that (this month) is due too, so one notice comes back — for the next period only.
+  const again = [...d.querySelectorAll('#repeatList li')];
+  assert.strictEqual(again.length, 1);
+  again[0].querySelector('button').click();
+  assert.strictEqual($('#invNumber').value, 'INV-0009'); // the unsaved INV-0008 isn't reused
+  assert.strictEqual(saved()['INV-0005'].lastRepeated, addMonths(start, 2));
+  assert.ok($('#repeatDue').hidden);
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('saving the open repeating invoice keeps its lastRepeated', () => {
+  const list = { 'INV-0001': inv('INV-0001', { invDate: addMonths(TODAY, -1), repeat: 'monthly', lastRepeated: TODAY }) };
+  const { $, d, saved } = boot({ seed: { 'invoice-list': list } });
+  assert.ok($('#repeatDue').hidden);
+  openRow(d, 'INV-0001');
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(saved()['INV-0001'].lastRepeated, TODAY);
+  assert.strictEqual(saved()['INV-0001'].repeat, 'monthly');
+});
+
+test('old saves without repeat fields open cleanly', () => {
+  const { $, d, w } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } });
+  assert.ok($('#repeatDue').hidden);
+  openRow(d, 'INV-0001');
+  assert.strictEqual($('#repeat').value, '');
+  $('#saveInvoiceBtn').click();
   assert.strictEqual(w.alerts.length, 0);
 });

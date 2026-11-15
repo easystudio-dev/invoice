@@ -99,6 +99,9 @@ button:disabled { cursor: default; }
 .quote-status { gap: 6px; }
 .quote-status select { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; }
 .quote-status:has(select:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+.repeat-opt { gap: 6px; }
+.repeat-opt select { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+.repeat-opt:has(select:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
 .paid-toggle input { margin: 0; width: 15px; height: 15px; accent-color: var(--paid); }
 .paid-toggle:has(input:checked) { border-color: var(--paid); color: var(--paid); }
 .paid-toggle:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -133,6 +136,30 @@ button:disabled { cursor: default; }
 .ledger summary::-webkit-details-marker { display: none; }
 .ledger-count { font-weight: 500; font-variant-numeric: tabular-nums; }
 .ledger-empty { font-size: 13px; color: var(--muted); padding: 12px 4px; margin: 0; max-width: 32ch; }
+
+/* Ledger tools: totals, repeat notice, search + filter. Kept compact for the narrow rail. */
+.ledger-totals { padding: 10px 4px 2px; font-variant-numeric: tabular-nums; }
+.totals-line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; font-size: 13px; padding: 1px 0; }
+.totals-line .totals-cur { font-size: 11px; font-weight: 600; color: var(--muted); }
+.totals-line .totals-label { color: var(--muted); }
+.totals-line .totals-value { font-weight: 600; text-align: right; }
+.totals-line.is-overdue .totals-value { color: var(--overdue); }
+.totals-line.is-zero .totals-value { color: var(--muted); font-weight: 500; }
+.repeat-due { margin: 10px 0 2px; padding: 8px 10px; border: 1px solid var(--line-strong); border-left: 3px solid var(--part); border-radius: 6px; background: var(--surface); }
+.repeat-title { font-size: 12px; font-weight: 600; margin: 0 0 4px; color: var(--part); }
+.repeat-list { list-style: none; margin: 0; padding: 0; }
+.repeat-list li { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+.repeat-list .repeat-text { min-width: 0; overflow-wrap: anywhere; }
+.repeat-list .btn { height: 28px; padding: 0 10px; font-size: 12px; flex-shrink: 0; }
+.ledger-tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0 4px; }
+.ledger-search, .ledger-filter {
+  height: 34px; padding: 0 8px; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px;
+}
+.ledger-search { flex: 1 1 120px; min-width: 0; }
+.ledger-filter { flex: 0 1 auto; max-width: 100%; }
+.ledger-search:focus-visible, .ledger-filter:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.ledger-shown { flex: 1 1 100%; margin: 0; font-size: 12px; color: var(--muted); min-height: 1em; }
 
 .ledger-list { list-style: none; margin: 0; padding: 0; }
 .ledger-list li { border-bottom: 1px solid var(--line); }
@@ -199,6 +226,13 @@ button:disabled { cursor: default; }
   --muted: #58606d;
   --line: #dde1da;
   --field-edge: #8a9288; /* 3:1 on white, for control outlines */
+  /* Controls on the sheet (.btn, messages, hovers) use these too — without them they pick up dark-theme values on white paper. */
+  --surface: #f6f7f4;
+  --line-strong: #aeb5ab;
+  --paid: #2447c9;
+  --overdue: #b8322a;
+  --part: #8a5200;
+  --credit: #6b3fa0;
   position: relative;
   max-width: 850px;
   margin: 0 auto;

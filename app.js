@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'invoice-draft';
 
 const itemsBody = document.getElementById('itemsBody');
-const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason'];
+const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason','repeat'];
 
 const DOC_NAMES = { invoice: 'invoice', quote: 'quote', credit: 'credit note' };
 const docKind = () => (DOC_NAMES[document.getElementById('docType').value] ? document.getElementById('docType').value : 'invoice');
@@ -12,6 +12,9 @@ const capitalise = s => s[0].toUpperCase() + s.slice(1);
 
 // The saved invoice a credit note on screen is for ('' when none). Not a form field: it's set by Credit note.
 let creditFor = '';
+
+// For a saved repeating invoice: the scheduled date its latest repeat was created for. Not a form field: only Create sets it.
+let lastRepeated = '';
 
 // Format each currency the way its own country writes it (en-ZA uses a decimal comma, odd for e.g. USD clients).
 const CURRENCY_LOCALES = {
@@ -187,11 +190,13 @@ function collectData() {
   }));
   data.payments = payments.map(p => ({ ...p }));
   data.creditFor = data.docType === 'credit' ? creditFor : '';
+  if (data.docType !== 'invoice') data.repeat = '';
+  data.lastRepeated = data.repeat ? lastRepeated : '';
   return data;
 }
 
 function applyData(data) {
-  data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', creditReason: '', ...data }; // saves from before quotes / discounts / quote status / credit notes existed
+  data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', creditReason: '', repeat: '', lastRepeated: '', ...data }; // saves from before quotes / discounts / quote status / credit notes / repeats existed
   fields.forEach(id => {
     const el = document.getElementById(id);
     // Missing checkbox = unchecked, so older saves without `paid` don't inherit the previous invoice's tick.
@@ -200,6 +205,7 @@ function applyData(data) {
   });
   payments = Array.isArray(data.payments) ? data.payments.filter(p => p && typeof p === 'object').map(p => ({ ...p })) : [];
   creditFor = data.docType === 'credit' && typeof data.creditFor === 'string' ? data.creditFor : '';
+  lastRepeated = typeof data.lastRepeated === 'string' ? data.lastRepeated : '';
   renderPayments();
   itemsBody.innerHTML = '';
   (data.items || []).forEach(item => addItem(item));
@@ -294,7 +300,7 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
     invNumber: nextFreeNumber(getSavedList(), docKind(), data.invNumber.trim()),
     invDate: localISODate(new Date()),
     dueDate: '',
-    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [], creditFor: '', creditReason: '',
+    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [], creditFor: '', creditReason: '', repeat: '', lastRepeated: '',
     items: [{ desc: '', qty: 1, unit: '', price: 0 }],
   });
   applyDueDate();
@@ -327,6 +333,8 @@ function switchDocType(type) {
   document.getElementById('paid').checked = false;
   document.getElementById('quoteStatus').value = '';
   document.getElementById('creditReason').value = '';
+  document.getElementById('repeat').value = '';
+  lastRepeated = '';
   creditFor = '';
   payments = [];
   renderPayments();
@@ -357,7 +365,7 @@ function startCreditNote(num) {
     invNumber: nextFreeNumber(list, 'credit'),
     invDate: localISODate(new Date()),
     dueDate: '', paid: false, quoteStatus: '', payments: [],
-    creditFor: num, creditReason: '',
+    creditFor: num, creditReason: '', repeat: '', lastRepeated: '',
   });
   setOpenInvoice('');
   save();
@@ -438,20 +446,83 @@ document.getElementById('toName').addEventListener('input', (e) => {
   document.getElementById('toEmail').value = client.toEmail;
 });
 
+// --- Ledger tools: search, status filter, totals, repeat notices ---
+// Only the filter is remembered; search text starts empty each visit.
+const FILTER_KEY = 'invoice-ledger-filter';
+const ledgerSearch = document.getElementById('ledgerSearch');
+const ledgerFilterEl = document.getElementById('ledgerFilter');
+const savedFilter = load(FILTER_KEY);
+if ([...ledgerFilterEl.options].some(o => o.value === savedFilter)) ledgerFilterEl.value = savedFilter;
+ledgerSearch.addEventListener('input', () => refreshInvoiceList());
+ledgerFilterEl.addEventListener('change', () => {
+  store(FILTER_KEY, ledgerFilterEl.value);
+  refreshInvoiceList();
+});
+
+// Outstanding and Overdue per currency (the currency is named only when there's more than one).
+function renderLedgerTotals(list, today) {
+  const totals = ledgerTotals(list, today);
+  const currencies = Object.keys(totals).sort();
+  const box = document.getElementById('ledgerTotals');
+  box.hidden = !currencies.length;
+  box.replaceChildren(...currencies.flatMap(cur => {
+    const t = totals[cur];
+    const prefix = currencies.length > 1 ? `${cur} · ` : '';
+    return [['Outstanding', t.outstanding, t.count, ''], ['Overdue', t.overdue, t.overdueCount, t.overdue > 0 ? 'is-overdue' : 'is-zero']].map(([label, value, count, cls]) => {
+      const line = document.createElement('div');
+      line.className = `totals-line ${cls}`.trim();
+      const name = document.createElement('span');
+      name.className = 'totals-label';
+      name.textContent = `${prefix}${label}${count ? ` (${count})` : ''}`;
+      const amount = document.createElement('span');
+      amount.className = 'totals-value';
+      amount.textContent = money(value, cur);
+      line.append(name, amount);
+      return line;
+    });
+  }));
+}
+
+// Saved repeating invoices whose next date has come. Nothing is created until Create is pressed.
+function renderRepeatDue(list, today) {
+  const due = dueRepeats(list, today);
+  document.getElementById('repeatDue').hidden = !due.length;
+  document.getElementById('repeatList').replaceChildren(...due.map(({ num, date }) => {
+    const li = document.createElement('li');
+    const text = document.createElement('span');
+    text.className = 'repeat-text';
+    text.textContent = `${num} · ${list[num].toName || 'No client'} · ${shortDate(date)}`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = 'Create';
+    btn.setAttribute('aria-label', `Create next invoice from ${num}, dated ${shortDate(date)}`);
+    btn.addEventListener('click', () => createRepeat(num, date));
+    li.append(text, btn);
+    return li;
+  }));
+}
+
 function refreshInvoiceList() {
   const list = getSavedList();
   const today = localISODate(new Date());
   const numbers = Object.keys(list).sort().reverse();
+  const shown = numbers.filter(num => ledgerMatches(list, num, today, ledgerSearch.value, ledgerFilterEl.value));
   document.getElementById('invoiceCount').textContent = numbers.length || '';
   refreshClients(list, numbers);
   document.getElementById('ledgerEmpty').hidden = numbers.length > 0;
-  invoiceListEl.replaceChildren(...numbers.map(num => {
+  document.getElementById('ledgerNoMatch').hidden = !numbers.length || shown.length > 0;
+  document.getElementById('ledgerTools').hidden = !numbers.length;
+  const count = numbers.length ? `${shown.length} of ${numbers.length} shown` : '';
+  const countEl = document.getElementById('ledgerShown');
+  if (countEl.textContent !== count) countEl.textContent = count; // a live region: only touch it when the text changes
+  renderLedgerTotals(list, today);
+  renderRepeatDue(list, today);
+  invoiceListEl.replaceChildren(...shown.map(num => {
     const inv = list[num];
-    const total = savedTotal(inv);
-    const credit = inv.docType === 'credit';
-    const credited = credit || inv.docType === 'quote' ? 0 : creditsTotal(list, num);
-    const status = invoiceStatus(inv, today, total, credited);
-    const owing = !credit && inv.docType !== 'quote' && status !== 'Paid' && status !== 'Credited' &&
+    const { total, credited, status, kind } = ledgerEntry(list, num, today);
+    const credit = kind === 'credit';
+    const owing = kind === 'invoice' && status !== 'Paid' && status !== 'Credited' &&
       (paymentsTotal(inv.payments) > 0 || credited > 0);
     // A credit note shows as money going back: negative.
     const amount = credit ? money(-total, inv.currency)
@@ -483,9 +554,62 @@ function refreshInvoiceList() {
     return li;
   }));
   deleteInvoiceBtn.hidden = !list[openInvoice];
+  document.getElementById('duplicateBtn').hidden = !list[openInvoice] || list[openInvoice].docType === 'credit';
+  document.getElementById('repeatWrap').hidden = !(list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice');
   // Only a saved invoice can be credited: the credit note has to point at what was actually issued.
   document.getElementById('creditNoteBtn').hidden = !(list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice');
 }
+
+// --- Duplicate and repeat ---
+// A new, unsaved copy of saved document `src` (not the screen, which may have unsaved edits): same type, client,
+// lines, notes and settings, dated `date`, with the next free number and a due date from the terms.
+// No payments, paid flag, quote status, credit reference or repeat schedule come along. Returns the new number.
+function startCopy(src, date) {
+  const type = src.docType || 'invoice';
+  const typed = document.getElementById('invNumber').value.trim();
+  // An unsaved copy still on screen holds its number, so a second copy doesn't take it too.
+  const invNumber = nextFreeNumber(getSavedList(), type, docKind() === type ? typed : '');
+  // Custom terms have no fixed days, so keep the gap between the original's date and due date.
+  const gap = src.invDate && src.dueDate ? Math.round((new Date(src.dueDate) - new Date(src.invDate)) / 86400000) : NaN;
+  applyData({
+    ...src, invNumber, invDate: date,
+    dueDate: src.terms === 'custom' && type !== 'quote' && Number.isFinite(gap) ? addDays(date, gap) : '',
+    paid: false, quoteStatus: '', payments: [], creditFor: '', creditReason: '', repeat: '', lastRepeated: '',
+  });
+  applyDueDate();
+  setOpenInvoice('');
+  save();
+  refreshInvoiceList();
+  document.getElementById('saveInvoiceBtn').focus(); // the pressed button just disappeared
+  return invNumber;
+}
+
+document.getElementById('duplicateBtn').addEventListener('click', () => {
+  const src = getSavedList()[openInvoice];
+  if (!src || src.docType === 'credit') return;
+  const from = openInvoice;
+  const num = startCopy(src, localISODate(new Date()));
+  document.getElementById('saveStatus').textContent = `Duplicated ${from} as ${num}. Press Save to keep it.`;
+});
+
+// Create the repeat that's due: like Duplicate but dated on the scheduled date. The source is marked straight away
+// (even before the new invoice is saved) so the notice doesn't offer the same period twice.
+function createRepeat(from, date) {
+  const list = getSavedList();
+  if (!list[from]) return;
+  list[from].lastRepeated = date;
+  if (!store(LIST_KEY, JSON.stringify(list))) { alert('Couldn’t create it — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
+  const num = startCopy(list[from], date);
+  document.getElementById('saveStatus').textContent = `Created ${num} from ${from}, dated ${shortDate(date)}. Press Save to keep it.`;
+}
+
+// Bookkeeping like Paid: the saved copy updates straight away. Nothing is created until a notice's Create is pressed.
+document.getElementById('repeat').addEventListener('change', (e) => {
+  save();
+  updateOpenSaved({ repeat: e.target.value });
+  document.getElementById('saveStatus').textContent = e.target.value
+    ? 'Repeats monthly. A notice appears in your list when the next one is due.' : 'No longer repeats.';
+});
 
 document.getElementById('saveInvoiceBtn').addEventListener('click', () => {
   const data = collectData();

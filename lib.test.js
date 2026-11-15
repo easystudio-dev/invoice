@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats } = require('./lib.js');
 
 // The fields invoiceTotals returned before VAT categories existed (it now also returns `categories`).
 const legacy = ({ lineTotals, subtotal, discount, net, vat, total }) => ({ lineTotals, subtotal, discount, net, vat, total });
@@ -395,4 +395,97 @@ test('invoiceStatus with credits: partial, full, credit + payment, overdue', () 
 
 test('invoiceStatus: credit notes have no status of their own', () => {
   assert.strictEqual(invoiceStatus({ docType: 'credit', dueDate: '2020-01-01', paid: true }, '2026-11-15', 115), '');
+});
+
+// --- Ledger tools ---
+const mk = (extra = {}) => ({ docType: 'invoice', currency: 'ZAR', dueDate: '2026-12-01', items: [{ desc: 'Work', qty: '1', price: '100' }], ...extra });
+
+test('ledgerTotals: outstanding and overdue per currency, only currencies present', () => {
+  const list = {
+    'INV-1': mk(), // 100 not yet due
+    'INV-2': mk({ dueDate: '2026-11-01', items: [{ qty: '1', price: '250' }] }), // overdue
+    'INV-3': mk({ currency: 'USD', dueDate: '2026-11-01' }),
+    'INV-4': mk({ paid: true }),
+  };
+  assert.deepStrictEqual(ledgerTotals(list, '2026-11-15'), {
+    ZAR: { outstanding: 350, overdue: 250, count: 2, overdueCount: 1 },
+    USD: { outstanding: 100, overdue: 100, count: 1, overdueCount: 1 },
+  });
+  assert.deepStrictEqual(ledgerTotals({ 'INV-4': mk({ paid: true }) }, '2026-11-15'), {});
+  assert.deepStrictEqual(ledgerTotals({}, '2026-11-15'), {});
+});
+
+test('ledgerTotals: payments and credit notes reduce balances; credited invoices drop out', () => {
+  const list = {
+    'INV-1': mk({ dueDate: '2026-11-01', items: [{ qty: '1', price: '1000' }], payments: [{ amount: '300' }] }),
+    'INV-2': mk({ items: [{ qty: '1', price: '500' }] }),
+    'CN-1': mk({ docType: 'credit', creditFor: 'INV-1', items: [{ qty: '1', price: '200' }] }),
+    'CN-2': mk({ docType: 'credit', creditFor: 'INV-2', items: [{ qty: '1', price: '500' }] }),
+  };
+  assert.deepStrictEqual(ledgerTotals(list, '2026-11-15'), { ZAR: { outstanding: 500, overdue: 500, count: 1, overdueCount: 1 } });
+});
+
+test('ledgerTotals: quotes and credit notes are never counted; old records default to ZAR', () => {
+  const noCurrency = { items: [{ qty: '1', price: '40' }], dueDate: '2026-12-01' };
+  const list = { 'QUO-1': mk({ docType: 'quote' }), 'CN-1': mk({ docType: 'credit' }), 'INV-1': noCurrency };
+  assert.deepStrictEqual(ledgerTotals(list, '2026-11-15'), { ZAR: { outstanding: 40, overdue: 0, count: 1, overdueCount: 0 } });
+});
+
+test('ledgerMatches: search by number, client or line description, any case; status filters', () => {
+  const list = {
+    'INV-0001': mk({ toName: 'Acme Ltd', items: [{ desc: 'Logo design', qty: '1', price: '10' }] }),
+    'INV-0002': mk({ dueDate: '2026-11-01' }),
+    'INV-0003': mk({ payments: [{ amount: '10' }] }),
+    'INV-0004': mk({ paid: true }),
+    'QUO-0001': mk({ docType: 'quote' }),
+    'CN-0001': mk({ docType: 'credit', creditFor: 'INV-9999' }),
+  };
+  const ids = (q, f) => Object.keys(list).filter(n => ledgerMatches(list, n, '2026-11-15', q, f));
+  assert.deepStrictEqual(ids('acme', 'all'), ['INV-0001']);
+  assert.deepStrictEqual(ids('LOGO', 'all'), ['INV-0001']);
+  assert.deepStrictEqual(ids('quo-0001', 'all'), ['QUO-0001']);
+  assert.deepStrictEqual(ids('nothing', 'all'), []);
+  assert.deepStrictEqual(ids('', 'unpaid'), ['INV-0001', 'INV-0002', 'INV-0003']);
+  assert.deepStrictEqual(ids('', 'overdue'), ['INV-0002']);
+  assert.deepStrictEqual(ids('', 'part'), ['INV-0003']);
+  assert.deepStrictEqual(ids('', 'paid'), ['INV-0004']);
+  assert.deepStrictEqual(ids('', 'quote'), ['QUO-0001']);
+  assert.deepStrictEqual(ids('', 'credit'), ['CN-0001']);
+  assert.strictEqual(ledgerEntry(list, 'INV-0003', '2026-11-15').balance, 90);
+});
+
+test('addMonths: clamps each step from the original day', () => {
+  assert.strictEqual(addMonths('2026-01-31', 1), '2026-02-28');
+  assert.strictEqual(addMonths('2026-01-31', 2), '2026-03-31');
+  assert.strictEqual(addMonths('2026-01-31', 3), '2026-04-30');
+  assert.strictEqual(addMonths('2028-01-31', 1), '2028-02-29'); // leap year
+  assert.strictEqual(addMonths('2028-02-29', 12), '2029-02-28');
+  assert.strictEqual(addMonths('2026-12-15', 1), '2027-01-15'); // Dec to Jan
+  assert.strictEqual(addMonths('2026-12-31', 14), '2028-02-29');
+  assert.strictEqual(addMonths('2026-03-10', 0), '2026-03-10');
+});
+
+test('nextRepeatDate: first period, then after lastRepeated; blank when not repeating', () => {
+  const base = { docType: 'invoice', repeat: 'monthly', invDate: '2026-01-31' };
+  assert.strictEqual(nextRepeatDate(base), '2026-02-28');
+  assert.strictEqual(nextRepeatDate({ ...base, lastRepeated: '2026-02-28' }), '2026-03-31');
+  assert.strictEqual(nextRepeatDate({ ...base, lastRepeated: '2026-03-31' }), '2026-04-30');
+  assert.strictEqual(nextRepeatDate({ ...base, repeat: '' }), '');
+  assert.strictEqual(nextRepeatDate({ ...base, docType: 'quote' }), '');
+  assert.strictEqual(nextRepeatDate({ ...base, invDate: '' }), '');
+  assert.strictEqual(nextRepeatDate({ invDate: '2026-01-31' }), '');
+});
+
+test('dueRepeats: only repeats whose date has come, oldest first', () => {
+  const list = {
+    'INV-2': { docType: 'invoice', repeat: 'monthly', invDate: '2026-10-10' },
+    'INV-1': { docType: 'invoice', repeat: 'monthly', invDate: '2026-09-20' },
+    'INV-3': { docType: 'invoice', repeat: 'monthly', invDate: '2026-11-14' },
+    'INV-4': { docType: 'invoice', invDate: '2026-01-01' },
+    'INV-5': { docType: 'invoice', repeat: 'monthly', invDate: '2026-09-20', lastRepeated: '2026-10-20' },
+  };
+  assert.deepStrictEqual(dueRepeats(list, '2026-11-15'), [
+    { num: 'INV-1', date: '2026-10-20' }, { num: 'INV-2', date: '2026-11-10' },
+  ]);
+  assert.deepStrictEqual(dueRepeats(list, '2026-11-20').map(r => r.num), ['INV-1', 'INV-2', 'INV-5']);
 });

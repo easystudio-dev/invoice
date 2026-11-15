@@ -168,4 +168,80 @@ function invoiceStatus(inv, today, total, credited = 0) {
   return received > 0 ? 'Part paid' : '';
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus };
+// Everything the ledger needs to know about saved document `num`: its kind, total, credits received,
+// status and balance. `unpaid` = an invoice that still has a balance and isn't Paid or Credited.
+function ledgerEntry(list, num, today) {
+  const doc = list[num];
+  const kind = doc.docType === 'credit' || doc.docType === 'quote' ? doc.docType : 'invoice';
+  const total = savedTotal(doc);
+  const credited = kind === 'invoice' ? creditsTotal(list, num) : 0;
+  const status = invoiceStatus(doc, today, total, credited);
+  const balance = kind === 'invoice' ? balanceDue(total, doc.payments, credited) : 0;
+  const unpaid = kind === 'invoice' && status !== 'Paid' && status !== 'Credited' && balance > 0;
+  return { kind, total, credited, status, balance, unpaid };
+}
+
+// Money still owed, per currency: { [currency]: { outstanding, overdue, count, overdueCount } }.
+// Only unpaid invoices count (quotes and credit notes don't, though credits already lower balances),
+// and only currencies that have some appear.
+function ledgerTotals(list, today) {
+  const out = {};
+  Object.keys(list || {}).forEach(num => {
+    const e = ledgerEntry(list, num, today);
+    if (!e.unpaid) return;
+    const cur = list[num].currency || 'ZAR';
+    const t = out[cur] ||= { outstanding: 0, overdue: 0, count: 0, overdueCount: 0 };
+    t.outstanding = round2(t.outstanding + e.balance);
+    t.count++;
+    if (e.status === 'Overdue') { t.overdue = round2(t.overdue + e.balance); t.overdueCount++; }
+  });
+  return out;
+}
+
+// Does saved document `num` belong in the ledger for this search text and status filter?
+// Search is case-insensitive over the number, the client name and the line descriptions.
+function ledgerMatches(list, num, today, query, filter) {
+  const doc = list[num];
+  const e = ledgerEntry(list, num, today);
+  const byFilter = {
+    all: true, unpaid: e.unpaid, overdue: e.kind === 'invoice' && e.status === 'Overdue',
+    part: e.kind === 'invoice' && e.status === 'Part paid', paid: e.kind === 'invoice' && e.status === 'Paid',
+    quote: e.kind === 'quote', credit: e.kind === 'credit',
+  };
+  if (!(byFilter[filter] ?? true)) return false;
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const hay = [num, doc.toName, ...(Array.isArray(doc.items) ? doc.items.map(it => it && it.desc) : [])];
+  return hay.some(h => String(h || '').toLowerCase().includes(q));
+}
+
+// `months` calendar months after an ISO date. Every step counts from the ORIGINAL day, clamped to the
+// month's length, so 31 Jan → 28 Feb → 31 Mar (not 28 Mar).
+function addMonths(isoDate, months) {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const index = y * 12 + (m - 1) + Number(months);
+  const year = Math.floor(index / 12);
+  const month = index % 12;
+  const day = Math.min(d, new Date(Date.UTC(year, month + 1, 0)).getUTCDate());
+  return `${String(year).padStart(4, '0')}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+// The next date a saved repeating invoice is due to be repeated: invoice date + one month per period, the
+// first period after `lastRepeated` (the scheduled date last created). '' when it doesn't repeat.
+function nextRepeatDate(doc) {
+  if (!doc || doc.repeat !== 'monthly' || (doc.docType || 'invoice') !== 'invoice' || !/^\d{4}-\d{2}-\d{2}$/.test(doc.invDate || '')) return '';
+  let n = 1;
+  let next = addMonths(doc.invDate, n);
+  while (doc.lastRepeated && next <= doc.lastRepeated && n < 1200) next = addMonths(doc.invDate, ++n);
+  return next;
+}
+
+// Repeating invoices whose next date is today or earlier, oldest first: [{ num, date }].
+function dueRepeats(list, today) {
+  return Object.keys(list || {})
+    .map(num => ({ num, date: nextRepeatDate(list[num]) }))
+    .filter(r => r.date && r.date <= today)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.num.localeCompare(b.num));
+}
+
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats };

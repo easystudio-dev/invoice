@@ -36,6 +36,25 @@
     </div>
     <details id="ledger" class="ledger" open>
       <summary>Your invoices <span id="invoiceCount" class="ledger-count"></span></summary>
+      <div id="ledgerTotals" class="ledger-totals" hidden></div>
+      <div id="repeatDue" class="repeat-due" hidden>
+        <h2 class="repeat-title">Due to repeat</h2>
+        <ul id="repeatList" class="repeat-list"></ul>
+      </div>
+      <div id="ledgerTools" class="ledger-tools" role="search" hidden>
+        <input id="ledgerSearch" type="search" class="ledger-search" placeholder="Search number, client, item" aria-label="Search saved documents by number, client or line description" autocomplete="off">
+        <select id="ledgerFilter" class="ledger-filter" aria-label="Filter by status">
+          <option value="all">All</option>
+          <option value="unpaid">Unpaid</option>
+          <option value="overdue">Overdue</option>
+          <option value="part">Part paid</option>
+          <option value="paid">Paid</option>
+          <option value="quote">Quotes</option>
+          <option value="credit">Credit notes</option>
+        </select>
+        <p id="ledgerShown" class="ledger-shown" role="status" aria-live="polite"></p>
+      </div>
+      <p id="ledgerNoMatch" class="ledger-empty" hidden>No matches. Try a different search or filter.</p>
       <p id="ledgerEmpty" class="ledger-empty">No saved invoices yet. Press Save to keep this one here — you’ll see which are paid and which are overdue.</p>
       <ul id="invoiceList" class="ledger-list"></ul>
     </details>
@@ -54,6 +73,13 @@
           </select>
         </label>
         <button id="convertBtn" type="button" class="btn">Convert to invoice</button>
+        <button id="duplicateBtn" type="button" class="btn" hidden title="Start a new unsaved copy of this saved document">Duplicate</button>
+        <label class="btn repeat-opt" id="repeatWrap" hidden><span>Repeats</span>
+          <select id="repeat" aria-label="Repeats">
+            <option value="">Never</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
         <button id="creditNoteBtn" type="button" class="btn" hidden title="Start a credit note for this saved invoice">Credit note</button>
         <button id="deleteInvoiceBtn" type="button" class="btn btn-quiet" hidden>Delete</button>
         <p id="saveStatus" class="visually-hidden" role="status"></p>
