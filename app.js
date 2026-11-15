@@ -347,8 +347,9 @@ function switchDocType(type) {
 // Choosing "Credit note" while a saved invoice is open credits that invoice, same as the Credit note button.
 document.getElementById('docType').addEventListener('input', (e) => {
   const list = getSavedList();
-  if (e.target.value === 'credit' && list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice') startCreditNote(openInvoice);
-  else switchDocType(e.target.value);
+  if (e.target.value === 'credit' && list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice') {
+    if (!startCreditNote(openInvoice)) e.target.value = 'invoice'; // cancelled: the select already shows "Credit note"
+  } else switchDocType(e.target.value);
 });
 
 // --- Credit notes ---
@@ -358,7 +359,7 @@ document.getElementById('docType').addEventListener('input', (e) => {
 function startCreditNote(num) {
   const list = getSavedList();
   const original = list[num];
-  if (!original) return;
+  if (!original || !confirmDiscard('Start a credit note')) return false;
   applyData({
     ...original,
     docType: 'credit',
@@ -372,6 +373,16 @@ function startCreditNote(num) {
   refreshInvoiceList();
   document.getElementById('saveStatus').textContent = `Credit note ${document.getElementById('invNumber').value} for invoice ${num}. Add the reason, then press Save.`;
   document.getElementById('creditReason').focus(); // the Credit note button just disappeared
+  return true;
+}
+
+// Credit note, Duplicate and Create replace the sheet. Only ask when that would lose something: the sheet differs
+// from the saved copy of the open document (or there is none). A false "changed" only costs an extra question.
+function confirmDiscard(action) {
+  const savedCopy = getSavedList()[openInvoice];
+  const current = collectData();
+  const unchanged = savedCopy && Object.keys(current).every(k => JSON.stringify(current[k]) === JSON.stringify(savedCopy[k]));
+  return unchanged || confirm(`${action}? Changes on screen that aren’t saved will be lost.`);
 }
 document.getElementById('creditNoteBtn').addEventListener('click', () => startCreditNote(openInvoice));
 
@@ -586,7 +597,7 @@ function startCopy(src, date) {
 
 document.getElementById('duplicateBtn').addEventListener('click', () => {
   const src = getSavedList()[openInvoice];
-  if (!src || src.docType === 'credit') return;
+  if (!src || src.docType === 'credit' || !confirmDiscard(`Duplicate ${openInvoice}`)) return;
   const from = openInvoice;
   const num = startCopy(src, localISODate(new Date()));
   document.getElementById('saveStatus').textContent = `Duplicated ${from} as ${num}. Press Save to keep it.`;
@@ -596,7 +607,7 @@ document.getElementById('duplicateBtn').addEventListener('click', () => {
 // (even before the new invoice is saved) so the notice doesn't offer the same period twice.
 function createRepeat(from, date) {
   const list = getSavedList();
-  if (!list[from]) return;
+  if (!list[from] || !confirmDiscard(`Create the next ${from}`)) return; // before marking, so Cancel skips nothing
   list[from].lastRepeated = date;
   if (!store(LIST_KEY, JSON.stringify(list))) { alert('Couldn’t create it — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
   const num = startCopy(list[from], date);

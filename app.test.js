@@ -868,3 +868,55 @@ test('Export for Zoho Books: alerts and downloads nothing when no invoices are l
   assert.strictEqual(w.alerts.length, 1);
   assert.ok($('#zohoHelp').hidden);
 });
+
+// Credit note, Duplicate and Create replace the sheet: ask only when unsaved changes would be lost; Cancel changes nothing.
+function openSavedClean(extra = {}) {
+  const ago = n => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  const t = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001', { invDate: ago(40), ...extra }) } } });
+  t.d.querySelector('.ledger-row').click();
+  t.$('#saveInvoiceBtn').click(); // saved copy now matches the sheet exactly
+  t.asked = [];
+  t.w.confirm = msg => { t.asked.push(msg); return t.answer; };
+  return t;
+}
+
+test('Duplicate of an unchanged saved invoice does not ask', () => {
+  const t = openSavedClean();
+  t.$('#duplicateBtn').click();
+  assert.strictEqual(t.asked.length, 0);
+  assert.strictEqual(t.$('#invNumber').value, 'INV-0002');
+});
+
+test('Duplicate with unsaved edits asks; Cancel keeps the sheet', () => {
+  const t = openSavedClean();
+  t.type('#toName', 'Edited client');
+  t.answer = false;
+  t.$('#duplicateBtn').click();
+  assert.strictEqual(t.asked.length, 1);
+  assert.strictEqual(t.$('#invNumber').value, 'INV-0001');
+  assert.strictEqual(t.$('#toName').value, 'Edited client');
+});
+
+test('Credit note with unsaved edits: Cancel keeps the invoice and the Type select', () => {
+  const t = openSavedClean();
+  t.type('#notes', 'unsaved note');
+  t.answer = false;
+  t.$('#creditNoteBtn').click();
+  assert.strictEqual(t.asked.length, 1);
+  assert.strictEqual(t.$('#docType').value, 'invoice');
+  t.type('#docType', 'credit'); // same path via the Type select
+  assert.strictEqual(t.$('#docType').value, 'invoice');
+  assert.strictEqual(t.$('#notes').value, 'unsaved note');
+});
+
+test('Create repeat with unsaved edits: Cancel does not mark the period done', () => {
+  const t = openSavedClean({ repeat: 'monthly' });
+  t.type('#notes', 'unsaved note');
+  t.answer = false;
+  const create = [...t.d.querySelectorAll('button')].find(b => b.textContent === 'Create');
+  assert.ok(create, 'repeat notice shown');
+  create.click();
+  assert.strictEqual(t.asked.length, 1);
+  assert.ok(!t.saved()['INV-0001'].lastRepeated);
+  assert.strictEqual(t.$('#invNumber').value, 'INV-0001');
+});
