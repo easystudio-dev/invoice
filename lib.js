@@ -100,13 +100,35 @@ function nextFreeNumber(list, type, current = '') {
   return num;
 }
 
-// today is YYYY-MM-DD; ISO dates compare correctly as strings. A quote's dueDate is its "valid until".
-function invoiceStatus(inv, today) {
-  const late = inv.dueDate && inv.dueDate < today;
-  if (inv.docType === 'quote') return late ? 'Expired' : '';
-  if (inv.paid) return 'Paid';
-  if (late) return 'Overdue';
-  return '';
+// Sum of recorded payments in cents-exact form. Blank, invalid and non-positive amounts are ignored.
+function paymentsTotal(payments) {
+  if (!Array.isArray(payments)) return 0;
+  return round2(payments.reduce((sum, p) => {
+    const amount = parseFloat(p && p.amount);
+    return amount > 0 ? sum + amount : sum;
+  }, 0));
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus };
+// Amount still owed. Never below 0: an overpayment shows as a zero balance, not a credit.
+function balanceDue(total, payments) {
+  return Math.max(0, round2((total || 0) - paymentsTotal(payments)));
+}
+
+// today is YYYY-MM-DD; ISO dates compare correctly as strings. A quote's dueDate is its "valid until".
+// `total` (the invoice's grand total) lets payments that cover it count as Paid; leave it out and only the paid flag does.
+// Quotes: Accepted / Declined (inv.quoteStatus) win over Expired. Invoices: Paid, else Overdue (even with
+// part payments, so one status string), else 'Part paid', else ''.
+function invoiceStatus(inv, today, total) {
+  const late = inv.dueDate && inv.dueDate < today;
+  if (inv.docType === 'quote') {
+    if (inv.quoteStatus === 'accepted') return 'Accepted';
+    if (inv.quoteStatus === 'declined') return 'Declined';
+    return late ? 'Expired' : '';
+  }
+  const received = paymentsTotal(inv.payments);
+  if (inv.paid || (received > 0 && total !== undefined && received >= round2(total))) return 'Paid';
+  if (late) return 'Overdue';
+  return received > 0 ? 'Part paid' : '';
+}
+
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, invoiceStatus };

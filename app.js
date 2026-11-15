@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'invoice-draft';
 
 const itemsBody = document.getElementById('itemsBody');
-const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive'];
+const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus'];
 
 const isQuote = () => document.getElementById('docType').value === 'quote';
 const docName = () => (isQuote() ? 'quote' : 'invoice');
@@ -142,6 +142,7 @@ function recalc() {
   document.getElementById('vatAmount').textContent = money(t.vat);
   document.getElementById('grandTotal').textContent = money(t.total);
   const quote = isQuote();
+  showPayments(t.total, quote);
   document.body.dataset.doc = docName();
   // SARS: a VAT-charging invoice must be headed "Tax Invoice". A quote isn't a tax document.
   document.querySelector('.doc-title').textContent = quote ? 'QUOTE' : vatOn ? 'TAX INVOICE' : 'INVOICE';
@@ -149,7 +150,7 @@ function recalc() {
   document.querySelector('label[for=dueDate]').textContent = quote ? 'Valid until' : 'Due date';
   document.getElementById('totalLabel').textContent = vatOn ? 'Total incl. VAT' : quote ? 'Total' : 'Total due';
   document.getElementById('newInvoiceBtn').textContent = `New ${docName()}`;
-  updateStamp();
+  updateStamp(t.total);
 }
 
 function collectData() {
@@ -165,17 +166,20 @@ function collectData() {
     price: tr.querySelector('.item-price').value,
     vatCat: tr.querySelector('.item-vatcat').value,
   }));
+  data.payments = payments.map(p => ({ ...p }));
   return data;
 }
 
 function applyData(data) {
-  data = { docType: 'invoice', discountType: 'percent', discountValue: '', ...data }; // saves from before quotes / discounts existed
+  data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', ...data }; // saves from before quotes / discounts / quote status existed
   fields.forEach(id => {
     const el = document.getElementById(id);
     // Missing checkbox = unchecked, so older saves without `paid` don't inherit the previous invoice's tick.
     if (el.type === 'checkbox') el.checked = !!data[id];
     else if (id in data) el.value = data[id];
   });
+  payments = Array.isArray(data.payments) ? data.payments.filter(p => p && typeof p === 'object').map(p => ({ ...p })) : [];
+  renderPayments();
   itemsBody.innerHTML = '';
   (data.items || []).forEach(item => addItem(item));
   recalc();
@@ -195,14 +199,17 @@ function save() {
   store(STORAGE_KEY, JSON.stringify(collectData()));
 }
 
-// PAID / OVERDUE stamp on the paper, from the form as it stands (not just saved invoices).
-function updateStamp() {
+// PAID / OVERDUE / EXPIRED / ACCEPTED / DECLINED stamp on the paper, from the form as it stands (not just saved invoices).
+function updateStamp(total) {
   const stamp = document.getElementById('stamp');
-  const status = invoiceStatus({
+  let status = invoiceStatus({
     docType: docName(),
     paid: document.getElementById('paid').checked,
     dueDate: document.getElementById('dueDate').value,
-  }, localISODate(new Date()));
+    quoteStatus: document.getElementById('quoteStatus').value,
+    payments,
+  }, localISODate(new Date()), total);
+  if (status === 'Part paid') status = ''; // part-paid shows as the Balance due row, not a stamp
   if (stamp.textContent === status) return; // it's a live region — don't re-announce on every keystroke
   stamp.hidden = !status;
   stamp.textContent = status;
@@ -265,7 +272,7 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
     invNumber: nextFreeNumber(getSavedList(), docName(), data.invNumber.trim()),
     invDate: localISODate(new Date()),
     dueDate: '',
-    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '',
+    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [],
     items: [{ desc: '', qty: 1, unit: '', price: 0 }],
   });
   applyDueDate();
@@ -295,6 +302,9 @@ function switchDocType(type) {
   document.getElementById('docType').value = type;
   document.getElementById('invNumber').value = nextFreeNumber(getSavedList(), type);
   document.getElementById('paid').checked = false;
+  document.getElementById('quoteStatus').value = '';
+  payments = [];
+  renderPayments();
   applyDueDate();
   setOpenInvoice('');
   recalc();
@@ -305,6 +315,12 @@ document.getElementById('docType').addEventListener('input', (e) => switchDocTyp
 
 // Same client, lines and notes; dated today, with the next invoice number and due date from the terms.
 document.getElementById('convertBtn').addEventListener('click', () => {
+  // The saved quote that's open (not whatever the typed number matches) was accepted by being converted.
+  const list = getSavedList();
+  if (list[openInvoice] && list[openInvoice].docType === 'quote') {
+    list[openInvoice].quoteStatus = 'accepted';
+    store(LIST_KEY, JSON.stringify(list));
+  }
   invDateInput.value = localISODate(new Date());
   switchDocType('invoice');
   document.getElementById('saveStatus').textContent = `Converted to invoice ${document.getElementById('invNumber').value}. Press Save to keep it.`;
@@ -379,18 +395,21 @@ function refreshInvoiceList() {
     const inv = list[num];
     const { total } = invoiceTotals(inv.items || [], inv.vatToggle ? parseFloat(inv.vatRate) || 0 : 0,
       { type: inv.discountType, value: inv.discountValue }, { inclusive: !!(inv.vatToggle && inv.vatInclusive) });
-    const status = invoiceStatus(inv, today);
+    const status = invoiceStatus(inv, today, total);
+    const owing = inv.docType !== 'quote' && status !== 'Paid' && paymentsTotal(inv.payments) > 0;
+    const amount = owing ? `${money(balanceDue(total, inv.payments), inv.currency)} of ${money(total, inv.currency)}` : money(total, inv.currency);
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'ledger-row';
     row.dataset.status = status.toLowerCase();
     if (num === openInvoice) row.setAttribute('aria-current', 'true');
     // textContent, not innerHTML: invoice data may come from an imported file.
-    [[num, 'num'], [money(total, inv.currency), 'amount'], [inv.toName || 'No client', 'client'],
+    [[num, 'num'], [amount, 'amount'], [inv.toName || 'No client', 'client'],
      [status || dueNote(inv), 'status']].forEach(([text, cls]) => {
       const span = document.createElement('span');
       span.className = `ledger-${cls}`;
       span.textContent = text;
+      if (cls === 'amount' && owing) span.title = 'Balance due of total';
       row.append(span);
     });
     row.addEventListener('click', () => {
@@ -476,13 +495,91 @@ document.getElementById('paid').addEventListener('change', (e) => {
   stamp.classList.remove('thunk');
   if (e.target.checked) { void stamp.offsetWidth; stamp.classList.add('thunk'); } // restart the animation
   // The saved invoice that's open, not the number typed on screen — an unsaved draft can share a saved one's number.
+  updateOpenSaved({ paid: e.target.checked });
+});
+
+// Patches the saved invoice that's open (never one found by the typed number) and refreshes the ledger.
+function updateOpenSaved(patch) {
   const list = getSavedList();
-  const num = openInvoice;
-  if (!list[num]) return;
-  list[num].paid = e.target.checked;
+  if (!list[openInvoice]) return;
+  Object.assign(list[openInvoice], patch);
   store(LIST_KEY, JSON.stringify(list));
   refreshInvoiceList();
+}
+
+// Accepted / Declined is bookkeeping too, so it updates the open saved quote straight away.
+document.getElementById('quoteStatus').addEventListener('change', (e) => {
+  recalc();
+  save();
+  updateOpenSaved({ quoteStatus: e.target.value });
 });
+
+// --- Part payments (invoices only; the list is screen-only, the Paid / Balance due rows print) ---
+let payments = [];
+const payDate = document.getElementById('payDate');
+const payAmount = document.getElementById('payAmount');
+const payNote = document.getElementById('payNote');
+const paymentMsg = document.getElementById('paymentMsg');
+
+function showPayments(total, quote) {
+  const received = quote ? 0 : paymentsTotal(payments);
+  const fullyPaid = document.getElementById('paid').checked;
+  document.getElementById('paidRow').hidden = !received;
+  document.getElementById('balanceRow').hidden = !received;
+  document.getElementById('paidAmount').textContent = money(-received);
+  // Ticking "Paid" settles the invoice outright, so it shouldn't print a balance as well.
+  document.getElementById('balanceAmount').textContent = money(fullyPaid ? 0 : balanceDue(total, payments));
+}
+
+function renderPayments() {
+  document.getElementById('paymentList').replaceChildren(...payments.map((p, i) => {
+    const li = document.createElement('li');
+    const text = document.createElement('span');
+    // textContent: payment data may come from an imported file.
+    text.textContent = [p.date ? shortDate(p.date) : '', p.note || '', money(parseFloat(p.amount) || 0)].filter(Boolean).join(' · ');
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'del-row';
+    del.textContent = '×';
+    const label = `Remove payment of ${money(parseFloat(p.amount) || 0)}${p.note ? ' (' + p.note + ')' : ''}`;
+    del.setAttribute('aria-label', label);
+    del.title = 'Remove payment';
+    del.addEventListener('click', () => {
+      payments.splice(i, 1);
+      paymentsChanged();
+      payAmount.focus(); // the pressed button is gone
+    });
+    li.append(text, del);
+    return li;
+  }));
+}
+
+function paymentsChanged() {
+  renderPayments();
+  recalc();
+  save();
+  updateOpenSaved({ payments: payments.map(p => ({ ...p })) });
+}
+
+function addPayment() {
+  const amount = parseFloat(payAmount.value);
+  if (!(amount > 0)) {
+    paymentMsg.textContent = 'Enter the amount received.';
+    payAmount.focus();
+    return;
+  }
+  paymentMsg.textContent = '';
+  payments.push({ date: payDate.value || localISODate(new Date()), amount: String(amount), note: payNote.value.trim() });
+  payAmount.value = '';
+  payNote.value = '';
+  paymentsChanged();
+  payAmount.focus();
+}
+document.getElementById('addPaymentBtn').addEventListener('click', addPayment);
+[payAmount, payNote, payDate].forEach(el => el.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addPayment(); }
+}));
+payDate.value = localISODate(new Date());
 // Every edit on the sheet (fields, line items, checkboxes, selects) bubbles up here.
 document.getElementById('sheet').addEventListener('input', () => { recalc(); save(); });
 

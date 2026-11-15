@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, invoiceStatus } = require('./lib.js');
 
 // The fields invoiceTotals returned before VAT categories existed (it now also returns `categories`).
 const legacy = ({ lineTotals, subtotal, discount, net, vat, total }) => ({ lineTotals, subtotal, discount, net, vat, total });
@@ -15,6 +15,53 @@ test('invoiceStatus: paid wins, overdue only after the due date', () => {
 test('invoiceStatus: quotes expire instead of going overdue, and are never paid', () => {
   assert.strictEqual(invoiceStatus({ docType: 'quote', dueDate: '2026-10-20' }, '2026-10-21'), 'Expired');
   assert.strictEqual(invoiceStatus({ docType: 'quote', dueDate: '2026-10-21', paid: true }, '2026-10-21'), '');
+});
+
+test('paymentsTotal sums valid positive amounts to the cent and ignores junk', () => {
+  assert.strictEqual(paymentsTotal([{ amount: '0.1' }, { amount: 0.2 }, { amount: '' }, { amount: 'abc' }, { amount: '-5' }, null, {}]), 0.3);
+  assert.strictEqual(paymentsTotal(undefined), 0);
+  assert.strictEqual(paymentsTotal('nope'), 0);
+});
+
+test('balanceDue rounds to cents and never goes below zero', () => {
+  assert.strictEqual(balanceDue(1000, [{ amount: '500' }]), 500);
+  assert.strictEqual(balanceDue(100.1, [{ amount: '0.2' }]), 99.9);
+  assert.strictEqual(balanceDue(1000, [{ amount: '1000' }]), 0);
+  assert.strictEqual(balanceDue(1000, [{ amount: '1200' }]), 0); // overpayment
+  assert.strictEqual(balanceDue(1000), 1000);
+});
+
+test('invoiceStatus with payments: paid in full, part paid, overdue wins over part paid', () => {
+  const due = '2026-10-21', today = '2026-10-21', late = '2026-10-20';
+  const pay = (...amounts) => amounts.map(amount => ({ amount }));
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('500') }, today, 1000), 'Part paid');
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('400', '600') }, today, 1000), 'Paid'); // equal to total
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('1200') }, today, 1000), 'Paid'); // overpayment
+  assert.strictEqual(invoiceStatus({ dueDate: late, payments: pay('500') }, today, 1000), 'Overdue');
+  assert.strictEqual(invoiceStatus({ dueDate: late, payments: pay('1000') }, today, 1000), 'Paid');
+  assert.strictEqual(invoiceStatus({ dueDate: late, paid: true, payments: pay('1') }, today, 1000), 'Paid'); // tick wins
+  assert.strictEqual(invoiceStatus({ dueDate: due, paid: true, payments: [] }, today, 1000), 'Paid');
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('', 'x') }, today, 1000), ''); // junk payments
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('99.999') }, today, 100), 'Paid'); // to the cent
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('99.99') }, today, 100), 'Part paid');
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: pay('50') }, today), 'Part paid'); // no total given
+  assert.strictEqual(invoiceStatus({ dueDate: due, payments: [] }, today, 0), ''); // nothing received on a zero total
+});
+
+test('invoiceStatus for quotes: accepted / declined beat expired; payments are ignored', () => {
+  const quote = extra => ({ docType: 'quote', dueDate: '2026-10-20', ...extra });
+  assert.strictEqual(invoiceStatus(quote({ quoteStatus: 'accepted' }), '2026-10-21'), 'Accepted');
+  assert.strictEqual(invoiceStatus(quote({ quoteStatus: 'declined' }), '2026-10-21'), 'Declined');
+  assert.strictEqual(invoiceStatus(quote({ quoteStatus: '' }), '2026-10-21'), 'Expired');
+  assert.strictEqual(invoiceStatus(quote({ quoteStatus: 'accepted', dueDate: '2026-12-01' }), '2026-10-21'), 'Accepted');
+  assert.strictEqual(invoiceStatus(quote({ dueDate: '2026-12-01', payments: [{ amount: '5' }] }), '2026-10-21', 1), '');
+});
+
+test('invoiceStatus: records saved before payments / quoteStatus existed behave as before', () => {
+  assert.strictEqual(invoiceStatus({ paid: false, dueDate: '2026-10-20' }, '2026-10-21', 100), 'Overdue');
+  assert.strictEqual(invoiceStatus({ paid: false, dueDate: '2026-12-01' }, '2026-10-21', 100), '');
+  assert.strictEqual(invoiceStatus({ docType: 'quote', dueDate: '2026-12-01' }, '2026-10-21', 100), '');
+  assert.strictEqual(invoiceStatus({ paid: true }, '2026-10-21', 100), 'Paid');
 });
 
 test('nextNumberAfter continues from the highest number', () => {

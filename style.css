@@ -11,6 +11,7 @@
   --paper: #fff;
   --paid: #2447c9;
   --overdue: #b8322a;
+  --part: #8a5200;
   --font: 'Instrument Sans', system-ui, sans-serif;
   --font-stamp: 'Anton', Impact, 'Arial Narrow', sans-serif;
 }
@@ -25,6 +26,7 @@
   --surface: #262c28;
   --paid: #93a8ff;
   --overdue: #ff8f85;
+  --part: #f0c36a;
 }
 
 * { box-sizing: border-box; }
@@ -87,7 +89,11 @@ button:disabled { cursor: default; }
 
 .paid-toggle { user-select: none; }
 /* Quotes aren't paid and have a validity date instead of payment terms; invoices aren't converted. */
-[data-doc="quote"] .paid-toggle, [data-doc="quote"] .terms-row, [data-doc="invoice"] #convertBtn { display: none; }
+[data-doc="quote"] .paid-toggle, [data-doc="quote"] .terms-row, [data-doc="invoice"] #convertBtn,
+[data-doc="invoice"] .quote-status, [data-doc="quote"] .payments { display: none; }
+.quote-status { gap: 6px; }
+.quote-status select { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+.quote-status:has(select:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
 .paid-toggle input { margin: 0; width: 15px; height: 15px; accent-color: var(--paid); }
 .paid-toggle:has(input:checked) { border-color: var(--paid); color: var(--paid); }
 .paid-toggle:has(input:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -151,6 +157,9 @@ button:disabled { cursor: default; }
 .ledger-row[data-status="paid"] .ledger-status { color: var(--paid); font-weight: 600; }
 .ledger-row[data-status="overdue"] .ledger-status { color: var(--overdue); font-weight: 600; }
 .ledger-row[data-status="expired"] .ledger-status { font-weight: 600; }
+.ledger-row[data-status="part paid"] .ledger-status { color: var(--part); font-weight: 600; }
+.ledger-row[data-status="accepted"] .ledger-status { color: var(--paid); font-weight: 600; }
+.ledger-row[data-status="declined"] .ledger-status { color: var(--overdue); font-weight: 600; }
 
 /* --- Rail foot: backup, theme, small print --- */
 .rail-foot {
@@ -309,6 +318,8 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .stamp[data-status="paid"] { --stamp: #2447c9; }
 .stamp[data-status="overdue"] { --stamp: #b8322a; }
 .stamp[data-status="expired"] { --stamp: #58606d; }
+.stamp[data-status="accepted"] { --stamp: #1d7a46; }
+.stamp[data-status="declined"] { --stamp: #b8322a; }
 .stamp.thunk { animation: thunk .32s cubic-bezier(.2, 1.4, .5, 1); }
 @keyframes thunk {
   from { transform: rotate(-4deg) scale(1.5); opacity: 0; }
@@ -420,6 +431,18 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .vat-incl-row { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .vat-incl-row label { display: flex; align-items: center; gap: 6px; min-height: 24px; cursor: pointer; }
 .vat-incl-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
+.balance-row { font-weight: 700; font-size: 16px; border-bottom: 2px solid var(--ink); }
+.payments { padding-top: 14px; }
+.payments-title { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.payment-list { list-style: none; margin: 0; padding: 0; }
+.payment-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
+.payment-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.payment-form input { border: 1px solid var(--field-edge); border-radius: 4px; padding: 4px 6px; font-size: 13px; min-width: 0; }
+.payment-form #payDate { flex: 1 1 130px; }
+.payment-form #payAmount { flex: 1 1 80px; width: 80px; }
+.payment-form #payNote { flex: 2 1 110px; }
+.payment-form .btn { flex: 1 1 100%; justify-content: center; }
+.payment-msg { margin: 4px 0 0; min-height: 1em; font-size: 12px; color: var(--overdue); }
 .total-row { font-weight: 700; font-size: 20px; border-bottom: 2px solid var(--ink); padding-top: 12px; }
 
 /* --- Narrow screens: rail stacks on top, ledger folds into its summary line --- */

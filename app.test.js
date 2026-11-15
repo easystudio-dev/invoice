@@ -224,3 +224,167 @@ test('ledger total matches the sheet for an inclusive, mixed, discounted invoice
   assert.match(onScreen, /189[,.]68/);
   assert.ok(!$('#catStandardRow').hidden && !$('#catZeroRow').hidden && !$('#catExemptRow').hidden);
 });
+
+// Fills the first line with R1000, saves it and adds payments through the real form.
+function payFixture(extra = {}) {
+  const t = boot(extra);
+  t.type(t.d.querySelector('.item-price'), '1000');
+  t.type('#toName', 'Client');
+  t.$('#saveInvoiceBtn').click();
+  return t;
+}
+const addPay = ({ $, type }, amount, note = '') => { type('#payAmount', amount); type('#payNote', note); $('#addPaymentBtn').click(); };
+
+test('payments: Paid and Balance due rows, ledger balance, save and restore', () => {
+  const t = payFixture();
+  const { $, d, saved } = t;
+  assert.ok($('#paidRow').hidden && $('#balanceRow').hidden);
+  addPay(t, '200', 'Deposit');
+  addPay(t, '300', 'EFT');
+  assert.ok(!$('#paidRow').hidden && !$('#balanceRow').hidden);
+  assert.match($('#paidAmount').textContent, /-R\s*500[,.]00/);
+  assert.match($('#balanceAmount').textContent, /500[,.]00/);
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 2);
+  assert.match(d.querySelector('#paymentList li').textContent, /Deposit/);
+  // saved copy updated at once (the invoice is open), ledger shows balance of total and Part paid
+  const num = $('#invNumber').value;
+  assert.strictEqual(saved()[num].payments.length, 2);
+  assert.match(d.querySelector('.ledger-amount').textContent, /500[,.]00.*of.*1.?000[,.]00/);
+  assert.strictEqual(d.querySelector('.ledger-status').textContent, 'Part paid');
+  assert.strictEqual(d.querySelector('.ledger-row').dataset.status, 'part paid');
+  assert.ok($('#stamp').hidden); // no PART PAID stamp
+  // restore
+  $('#newInvoiceBtn').click();
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 2);
+  assert.match($('#balanceAmount').textContent, /500[,.]00/);
+});
+
+test('payments: blank or invalid amount is rejected; remove button updates totals and saved copy', () => {
+  const t = payFixture();
+  const { $, d, saved, w } = t;
+  addPay(t, '');
+  addPay(t, '-5');
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+  assert.ok($('#paymentMsg').textContent);
+  addPay(t, '250');
+  addPay(t, '100');
+  assert.match($('#balanceAmount').textContent, /650[,.]00/);
+  const btn = d.querySelector('#paymentList li .del-row');
+  assert.match(btn.getAttribute('aria-label'), /Remove payment of/);
+  btn.click();
+  assert.match($('#balanceAmount').textContent, /900[,.]00/);
+  assert.strictEqual(saved()[$('#invNumber').value].payments.length, 1);
+  d.querySelector('#paymentList li .del-row').click();
+  assert.ok($('#paidRow').hidden);
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('payments covering the total make the invoice Paid with a stamp; overpayment shows a zero balance', () => {
+  const t = payFixture();
+  const { $, d } = t;
+  addPay(t, '600');
+  addPay(t, '400');
+  assert.strictEqual($('#stamp').textContent, 'Paid');
+  assert.match($('#balanceAmount').textContent, /0[,.]00/);
+  assert.strictEqual(d.querySelector('.ledger-status').textContent, 'Paid');
+  assert.match(d.querySelector('.ledger-amount').textContent, /^R\s*1.?000[,.]00$/);
+  addPay(t, '50'); // overpay
+  assert.match($('#balanceAmount').textContent, /^R\s*0[,.]00$/);
+  assert.strictEqual($('#stamp').textContent, 'Paid');
+});
+
+test('overdue invoice with a part payment stays Overdue and the ledger still shows the balance', () => {
+  const t = payFixture();
+  t.type('#terms', 'custom');
+  t.type('#dueDate', '2020-01-01');
+  t.$('#saveInvoiceBtn').click();
+  addPay(t, '100');
+  assert.strictEqual(t.$('#stamp').textContent, 'Overdue');
+  assert.strictEqual(t.d.querySelector('.ledger-status').textContent, 'Overdue');
+  assert.match(t.d.querySelector('.ledger-amount').textContent, /900[,.]00.*of/);
+});
+
+test('New invoice, switching type and Convert do not carry payments', () => {
+  const t = payFixture();
+  const { $, d } = t;
+  addPay(t, '100');
+  $('#newInvoiceBtn').click();
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+  assert.ok($('#paidRow').hidden);
+  d.querySelector('.ledger-row').click();
+  t.type('#docType', 'quote');
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+  assert.ok($('#paidRow').hidden);
+  assert.strictEqual(JSON.parse(t.w.localStorage.getItem('invoice-draft')).payments.length, 0);
+});
+
+test('Convert from a saved quote marks that quote accepted; the new invoice has no payments or quote status', () => {
+  const quote = inv('QUO-0001', { docType: 'quote', dueDate: '2020-01-01', payments: [{ amount: '5' }] });
+  const { $, d, saved } = boot({ seed: { 'invoice-list': { 'QUO-0001': quote } } });
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual(d.querySelector('.ledger-status').textContent, 'Expired');
+  $('#convertBtn').click();
+  assert.strictEqual(saved()['QUO-0001'].quoteStatus, 'accepted');
+  assert.strictEqual(saved()['QUO-0001'].docType, 'quote');
+  assert.strictEqual($('#docType').value, 'invoice');
+  assert.strictEqual($('#quoteStatus').value, '');
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+  assert.strictEqual(Object.keys(saved()).length, 1);
+  assert.ok([...d.querySelectorAll('.ledger-row')].some(r => r.querySelector('.ledger-status').textContent === 'Accepted'));
+});
+
+test('Convert from an unsaved quote does not touch a saved quote with the same number', () => {
+  const { $, d, type, saved } = boot({ seed: { 'invoice-list': { 'QUO-0001': inv('QUO-0001', { docType: 'quote' }) } } });
+  type('#docType', 'quote');
+  type('#invNumber', 'QUO-0001');
+  $('#convertBtn').click();
+  assert.strictEqual(saved()['QUO-0001'].quoteStatus, undefined);
+});
+
+test('quote status on an opened saved quote updates its saved copy, the stamp and the ledger', () => {
+  const quote = inv('QUO-0002', { docType: 'quote', dueDate: '2020-01-01' });
+  const { $, d, type, saved } = boot({ seed: { 'invoice-list': { 'QUO-0002': quote } } });
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual($('#stamp').textContent, 'Expired');
+  type('#quoteStatus', 'accepted');
+  assert.strictEqual(saved()['QUO-0002'].quoteStatus, 'accepted');
+  assert.strictEqual($('#stamp').textContent, 'Accepted'); // beats Expired
+  assert.strictEqual(d.querySelector('.ledger-status').textContent, 'Accepted');
+  type('#quoteStatus', 'declined');
+  assert.strictEqual(saved()['QUO-0002'].quoteStatus, 'declined');
+  assert.strictEqual($('#stamp').textContent, 'Declined');
+  d.querySelector('.ledger-row').click(); // restores from the saved copy
+  assert.strictEqual($('#quoteStatus').value, 'declined');
+  $('#newInvoiceBtn').click();
+  assert.strictEqual($('#quoteStatus').value, '');
+});
+
+test('quote status on an unsaved quote leaves saved quotes alone', () => {
+  const { $, type, saved } = boot({ seed: { 'invoice-list': { 'QUO-0002': inv('QUO-0002', { docType: 'quote' }) } } });
+  type('#docType', 'quote');
+  type('#invNumber', 'QUO-0002');
+  type('#quoteStatus', 'declined');
+  assert.strictEqual(saved()['QUO-0002'].quoteStatus, undefined);
+});
+
+test('old saved invoice and quote without payments / quoteStatus open cleanly', () => {
+  const { $, d, w } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001'), 'QUO-0001': inv('QUO-0001', { docType: 'quote' }) } } });
+  // dirty the form first: nothing from it may leak into the old saves
+  d.querySelectorAll('.ledger-row').forEach(row => {
+    row.click();
+    assert.strictEqual(d.querySelectorAll('#paymentList li').length, 0);
+    assert.ok($('#paidRow').hidden);
+    assert.strictEqual($('#quoteStatus').value, '');
+  });
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('payment data from an imported file is shown as text, not markup', () => {
+  const evil = inv('INV-0009', { payments: [{ date: '2026-01-02', amount: '5', note: '<img src=x onerror=alert(1)>' }, null, 'junk'] });
+  const { d } = boot({ seed: { 'invoice-list': { 'INV-0009': evil } } });
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual(d.querySelectorAll('#paymentList img').length, 0);
+  assert.strictEqual(d.querySelectorAll('#paymentList li').length, 1);
+});

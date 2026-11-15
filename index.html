@@ -46,6 +46,13 @@
       <div class="desk-bar-group">
         <button id="saveInvoiceBtn" type="button" class="btn">Save</button>
         <label class="btn paid-toggle"><input type="checkbox" id="paid"> Paid</label>
+        <label class="btn quote-status"><span>Quote</span>
+          <select id="quoteStatus" aria-label="Quote status">
+            <option value="">Open</option>
+            <option value="accepted">Accepted</option>
+            <option value="declined">Declined</option>
+          </select>
+        </label>
         <button id="convertBtn" type="button" class="btn">Convert to invoice</button>
         <button id="deleteInvoiceBtn" type="button" class="btn btn-quiet" hidden>Delete</button>
         <p id="saveStatus" class="visually-hidden" role="status"></p>
@@ -185,6 +192,19 @@
             <label><input type="checkbox" id="vatInclusive"> Prices include VAT</label>
           </div>
           <div class="totals-row total-row"><span id="totalLabel">Total due</span><span id="grandTotal">R 0.00</span></div>
+          <div class="totals-row payment-row" id="paidRow" hidden><span>Paid</span><span id="paidAmount">R 0.00</span></div>
+          <div class="totals-row balance-row" id="balanceRow" hidden><span>Balance due</span><span id="balanceAmount">R 0.00</span></div>
+          <div class="payments no-print" id="payments">
+            <h3 class="payments-title">Payments received</h3>
+            <ul id="paymentList" class="payment-list"></ul>
+            <div class="payment-form">
+              <input type="date" id="payDate" aria-label="Payment date">
+              <input type="number" id="payAmount" min="0" step="0.01" inputmode="decimal" aria-label="Payment amount" placeholder="Amount">
+              <input id="payNote" aria-label="Payment note or method" placeholder="EFT, Deposit…" maxlength="40">
+              <button type="button" id="addPaymentBtn" class="btn" aria-label="Add payment">Add payment</button>
+            </div>
+            <p id="paymentMsg" class="payment-msg" role="status"></p>
+          </div>
         </div>
       </section>
     </article>
