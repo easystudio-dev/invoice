@@ -90,12 +90,14 @@ function nextNumberAfter(numbers, fallback) {
   return numbers.length ? nextInvoiceNumber([...numbers].sort().pop()) : fallback;
 }
 
-// Next free number in `type`'s sequence ('invoice' or 'quote'): one past the highest saved one,
+const FIRST_NUMBERS = { invoice: 'INV-0001', quote: 'QUO-0001', credit: 'CN-0001' };
+
+// Next free number in `type`'s sequence ('invoice', 'quote' or 'credit'): one past the highest saved one,
 // or past `current` when that's higher (e.g. an unsaved draft), and never a number already saved.
 function nextFreeNumber(list, type, current = '') {
   const sameType = Object.keys(list).filter(num => (list[num].docType || 'invoice') === type);
   if (current) sameType.push(current);
-  let num = nextNumberAfter(sameType, type === 'quote' ? 'QUO-0001' : 'INV-0001');
+  let num = nextNumberAfter(sameType, FIRST_NUMBERS[type] || FIRST_NUMBERS.invoice);
   while (list[num]) num = nextInvoiceNumber(num);
   return num;
 }
@@ -109,26 +111,61 @@ function paymentsTotal(payments) {
   }, 0));
 }
 
-// Amount still owed. Never below 0: an overpayment shows as a zero balance, not a credit.
-function balanceDue(total, payments) {
-  return Math.max(0, round2((total || 0) - paymentsTotal(payments)));
+// Amount still owed after payments and `credited` (credit notes issued against it). Never below 0:
+// an overpayment shows as a zero balance, not a credit.
+function balanceDue(total, payments, credited = 0) {
+  return Math.max(0, round2((total || 0) - paymentsTotal(payments) - (credited || 0)));
+}
+
+// Grand total of a document as saved (the same sum the sheet shows).
+function savedTotal(doc) {
+  const vatOn = !!doc.vatToggle;
+  return invoiceTotals(doc.items || [], vatOn ? parseFloat(doc.vatRate) || 0 : 0,
+    { type: doc.discountType, value: doc.discountValue }, { inclusive: !!(vatOn && doc.vatInclusive) }).total;
+}
+
+// Sum of the saved credit notes in `list` issued against invoice `invoiceNumber`. `exclude` is a number
+// to leave out — the credit note being saved, whose old copy it is about to replace.
+function creditsTotal(list, invoiceNumber, exclude) {
+  if (!list || !invoiceNumber) return 0;
+  return round2(Object.keys(list).reduce((sum, num) => {
+    const doc = list[num];
+    const isCredit = num !== exclude && doc && doc.docType === 'credit' && doc.creditFor === invoiceNumber;
+    return isCredit ? sum + Math.max(0, savedTotal(doc)) : sum;
+  }, 0));
+}
+
+// How much can still be credited on a saved invoice: its total less the credit notes already issued
+// against it (apart from `exclude`). A credit note may not go over this.
+function creditRemaining(list, invoiceNumber, exclude) {
+  const original = list && list[invoiceNumber];
+  if (!original) return 0;
+  return Math.max(0, round2(savedTotal(original) - creditsTotal(list, invoiceNumber, exclude)));
 }
 
 // today is YYYY-MM-DD; ISO dates compare correctly as strings. A quote's dueDate is its "valid until".
 // `total` (the invoice's grand total) lets payments that cover it count as Paid; leave it out and only the paid flag does.
 // Quotes: Accepted / Declined (inv.quoteStatus) win over Expired. Invoices: Paid, else Overdue (even with
 // part payments, so one status string), else 'Part paid', else ''.
-function invoiceStatus(inv, today, total) {
+// `credited` is the sum of credit notes issued against the invoice (needs `total` too). Rules:
+// - credits alone cover the total → 'Credited', even if payments were received (they're owed back, not owing);
+// - otherwise ticked paid, or payments + credits cover it with at least one payment → 'Paid';
+// - a part credit on its own doesn't get a status: it only lowers the balance (and can still be Overdue).
+// Credit notes have no status of their own; the ledger labels them "Credit for …".
+function invoiceStatus(inv, today, total, credited = 0) {
   const late = inv.dueDate && inv.dueDate < today;
+  if (inv.docType === 'credit') return '';
   if (inv.docType === 'quote') {
     if (inv.quoteStatus === 'accepted') return 'Accepted';
     if (inv.quoteStatus === 'declined') return 'Declined';
     return late ? 'Expired' : '';
   }
   const received = paymentsTotal(inv.payments);
-  if (inv.paid || (received > 0 && total !== undefined && received >= round2(total))) return 'Paid';
+  const known = total !== undefined;
+  if (known && credited > 0 && round2(credited) >= round2(total)) return 'Credited';
+  if (inv.paid || (received > 0 && known && round2(received + (credited || 0)) >= round2(total))) return 'Paid';
   if (late) return 'Overdue';
   return received > 0 ? 'Part paid' : '';
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, invoiceStatus };
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus };

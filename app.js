@@ -1,10 +1,17 @@
 const STORAGE_KEY = 'invoice-draft';
 
 const itemsBody = document.getElementById('itemsBody');
-const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus'];
+const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason'];
 
-const isQuote = () => document.getElementById('docType').value === 'quote';
-const docName = () => (isQuote() ? 'quote' : 'invoice');
+const DOC_NAMES = { invoice: 'invoice', quote: 'quote', credit: 'credit note' };
+const docKind = () => (DOC_NAMES[document.getElementById('docType').value] ? document.getElementById('docType').value : 'invoice');
+const isQuote = () => docKind() === 'quote';
+const isCredit = () => docKind() === 'credit';
+const docName = () => DOC_NAMES[docKind()];
+const capitalise = s => s[0].toUpperCase() + s.slice(1);
+
+// The saved invoice a credit note on screen is for ('' when none). Not a form field: it's set by Credit note.
+let creditFor = '';
 
 // Format each currency the way its own country writes it (en-ZA uses a decimal comma, odd for e.g. USD clients).
 const CURRENCY_LOCALES = {
@@ -142,15 +149,27 @@ function recalc() {
   document.getElementById('vatAmount').textContent = money(t.vat);
   document.getElementById('grandTotal').textContent = money(t.total);
   const quote = isQuote();
-  showPayments(t.total, quote);
-  document.body.dataset.doc = docName();
+  const credit = isCredit();
+  const credited = openInvoiceCredits();
+  showPayments(t.total, quote || credit, credited);
+  document.body.dataset.doc = docKind();
   // SARS: a VAT-charging invoice must be headed "Tax Invoice". A quote isn't a tax document.
-  document.querySelector('.doc-title').textContent = quote ? 'QUOTE' : vatOn ? 'TAX INVOICE' : 'INVOICE';
-  document.querySelector('label[for=invNumber]').textContent = quote ? 'Quote #' : 'Invoice #';
+  // A credit note is headed "Credit Note" with or without VAT — that's the wording SARS asks for.
+  document.querySelector('.doc-title').textContent = credit ? 'CREDIT NOTE' : quote ? 'QUOTE' : vatOn ? 'TAX INVOICE' : 'INVOICE';
+  document.querySelector('label[for=invNumber]').textContent = credit ? 'Credit note #' : quote ? 'Quote #' : 'Invoice #';
   document.querySelector('label[for=dueDate]').textContent = quote ? 'Valid until' : 'Due date';
-  document.getElementById('totalLabel').textContent = vatOn ? 'Total incl. VAT' : quote ? 'Total' : 'Total due';
+  document.getElementById('dueRow').hidden = credit; // a credit note isn't paid, so it has no due date
+  document.getElementById('totalLabel').textContent = credit ? (vatOn ? 'Total credit incl. VAT' : 'Total credit')
+    : vatOn ? 'Total incl. VAT' : quote ? 'Total' : 'Total due';
+  document.getElementById('creditRef').textContent = creditFor ? `Credit note for invoice ${creditFor}` : '';
   document.getElementById('newInvoiceBtn').textContent = `New ${docName()}`;
-  updateStamp(t.total);
+  updateStamp(t.total, credited);
+}
+
+// Sum of saved credit notes against the saved invoice that's open (0 for drafts, quotes and credit notes).
+function openInvoiceCredits() {
+  if (docKind() !== 'invoice' || !openInvoice) return 0;
+  return creditsTotal(getSavedList(), openInvoice);
 }
 
 function collectData() {
@@ -167,11 +186,12 @@ function collectData() {
     vatCat: tr.querySelector('.item-vatcat').value,
   }));
   data.payments = payments.map(p => ({ ...p }));
+  data.creditFor = data.docType === 'credit' ? creditFor : '';
   return data;
 }
 
 function applyData(data) {
-  data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', ...data }; // saves from before quotes / discounts / quote status existed
+  data = { docType: 'invoice', discountType: 'percent', discountValue: '', quoteStatus: '', creditReason: '', ...data }; // saves from before quotes / discounts / quote status / credit notes existed
   fields.forEach(id => {
     const el = document.getElementById(id);
     // Missing checkbox = unchecked, so older saves without `paid` don't inherit the previous invoice's tick.
@@ -179,6 +199,7 @@ function applyData(data) {
     else if (id in data) el.value = data[id];
   });
   payments = Array.isArray(data.payments) ? data.payments.filter(p => p && typeof p === 'object').map(p => ({ ...p })) : [];
+  creditFor = data.docType === 'credit' && typeof data.creditFor === 'string' ? data.creditFor : '';
   renderPayments();
   itemsBody.innerHTML = '';
   (data.items || []).forEach(item => addItem(item));
@@ -199,16 +220,16 @@ function save() {
   store(STORAGE_KEY, JSON.stringify(collectData()));
 }
 
-// PAID / OVERDUE / EXPIRED / ACCEPTED / DECLINED stamp on the paper, from the form as it stands (not just saved invoices).
-function updateStamp(total) {
+// PAID / OVERDUE / EXPIRED / ACCEPTED / DECLINED / CREDITED stamp on the paper, from the form as it stands (not just saved invoices).
+function updateStamp(total, credited) {
   const stamp = document.getElementById('stamp');
   let status = invoiceStatus({
-    docType: docName(),
+    docType: docKind(),
     paid: document.getElementById('paid').checked,
     dueDate: document.getElementById('dueDate').value,
     quoteStatus: document.getElementById('quoteStatus').value,
     payments,
-  }, localISODate(new Date()), total);
+  }, localISODate(new Date()), total, credited);
   if (status === 'Part paid') status = ''; // part-paid shows as the Balance due row, not a stamp
   if (stamp.textContent === status) return; // it's a live region — don't re-announce on every keystroke
   stamp.hidden = !status;
@@ -238,13 +259,14 @@ document.getElementById('emailBtn').addEventListener('click', () => {
   const doc = docName();
   const num = document.getElementById('invNumber').value.trim() || `this ${doc}`;
   const total = document.getElementById('grandTotal').textContent;
-  const due = document.getElementById('dueDate').value;
+  const due = isCredit() ? '' : document.getElementById('dueDate').value;
+  const against = isCredit() && creditFor ? `, against invoice ${creditFor}` : '';
 
-  const subject = `${doc === 'quote' ? 'Quote' : 'Invoice'} ${num} from ${business}`;
+  const subject = `${capitalise(doc)} ${num} from ${business}`;
   const body = [
     `Hi ${client || 'there'},`,
     '',
-    `Please find attached ${doc} ${num} for ${total}${due ? `, ${doc === 'quote' ? 'valid until' : 'due'} ${due}` : ''}.`,
+    `Please find attached ${doc} ${num} for ${total}${against}${due ? `, ${doc === 'quote' ? 'valid until' : 'due'} ${due}` : ''}.`,
     '',
     'Kind regards,',
     business,
@@ -258,7 +280,7 @@ const APP_TITLE = document.title;
 document.getElementById('printBtn').addEventListener('click', () => {
   const num = document.getElementById('invNumber').value.trim() || docName();
   const client = document.getElementById('toName').value.trim();
-  document.title = `${isQuote() ? 'Quote' : 'Invoice'} ${num}${client ? ' - ' + client : ''}`;
+  document.title = `${capitalise(docName())} ${num}${client ? ' - ' + client : ''}`;
   window.print();
 });
 window.addEventListener('afterprint', () => { document.title = APP_TITLE; });
@@ -269,10 +291,10 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
   const data = collectData();
   applyData({
     ...data,
-    invNumber: nextFreeNumber(getSavedList(), docName(), data.invNumber.trim()),
+    invNumber: nextFreeNumber(getSavedList(), docKind(), data.invNumber.trim()),
     invDate: localISODate(new Date()),
     dueDate: '',
-    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [],
+    toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [], creditFor: '', creditReason: '',
     items: [{ desc: '', qty: 1, unit: '', price: 0 }],
   });
   applyDueDate();
@@ -286,8 +308,9 @@ const termsSelect = document.getElementById('terms');
 const invDateInput = document.getElementById('invDate');
 const dueDateInput = document.getElementById('dueDate');
 
-// Invoices: due date from payment terms. Quotes: valid for 30 days.
+// Invoices: due date from payment terms. Quotes: valid for 30 days. Credit notes: none.
 function applyDueDate() {
+  if (isCredit()) { dueDateInput.value = ''; return; }
   const days = isQuote() ? 30 : termsSelect.value;
   if (days === 'custom') return;
   dueDateInput.value = addDays(invDateInput.value || localISODate(new Date()), days);
@@ -297,12 +320,14 @@ termsSelect.addEventListener('input', applyDueDate);
 invDateInput.addEventListener('input', applyDueDate);
 
 // --- Quotes ---
-// Switching type makes it a new, unsaved document numbered in its own sequence (QUO-… / INV-…).
+// Switching type makes it a new, unsaved document numbered in its own sequence (QUO-… / INV-… / CN-…).
 function switchDocType(type) {
   document.getElementById('docType').value = type;
   document.getElementById('invNumber').value = nextFreeNumber(getSavedList(), type);
   document.getElementById('paid').checked = false;
   document.getElementById('quoteStatus').value = '';
+  document.getElementById('creditReason').value = '';
+  creditFor = '';
   payments = [];
   renderPayments();
   applyDueDate();
@@ -311,7 +336,36 @@ function switchDocType(type) {
   save();
   refreshInvoiceList();
 }
-document.getElementById('docType').addEventListener('input', (e) => switchDocType(e.target.value));
+// Choosing "Credit note" while a saved invoice is open credits that invoice, same as the Credit note button.
+document.getElementById('docType').addEventListener('input', (e) => {
+  const list = getSavedList();
+  if (e.target.value === 'credit' && list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice') startCreditNote(openInvoice);
+  else switchDocType(e.target.value);
+});
+
+// --- Credit notes ---
+// A new, unsaved credit note copying the saved invoice (not the screen, which may have unsaved edits):
+// same parties, currency, VAT settings, discount and lines, dated today, with the next CN number.
+// The user removes or edits lines to credit only part of it.
+function startCreditNote(num) {
+  const list = getSavedList();
+  const original = list[num];
+  if (!original) return;
+  applyData({
+    ...original,
+    docType: 'credit',
+    invNumber: nextFreeNumber(list, 'credit'),
+    invDate: localISODate(new Date()),
+    dueDate: '', paid: false, quoteStatus: '', payments: [],
+    creditFor: num, creditReason: '',
+  });
+  setOpenInvoice('');
+  save();
+  refreshInvoiceList();
+  document.getElementById('saveStatus').textContent = `Credit note ${document.getElementById('invNumber').value} for invoice ${num}. Add the reason, then press Save.`;
+  document.getElementById('creditReason').focus(); // the Credit note button just disappeared
+}
+document.getElementById('creditNoteBtn').addEventListener('click', () => startCreditNote(openInvoice));
 
 // Same client, lines and notes; dated today, with the next invoice number and due date from the terms.
 document.getElementById('convertBtn').addEventListener('click', () => {
@@ -393,19 +447,24 @@ function refreshInvoiceList() {
   document.getElementById('ledgerEmpty').hidden = numbers.length > 0;
   invoiceListEl.replaceChildren(...numbers.map(num => {
     const inv = list[num];
-    const { total } = invoiceTotals(inv.items || [], inv.vatToggle ? parseFloat(inv.vatRate) || 0 : 0,
-      { type: inv.discountType, value: inv.discountValue }, { inclusive: !!(inv.vatToggle && inv.vatInclusive) });
-    const status = invoiceStatus(inv, today, total);
-    const owing = inv.docType !== 'quote' && status !== 'Paid' && paymentsTotal(inv.payments) > 0;
-    const amount = owing ? `${money(balanceDue(total, inv.payments), inv.currency)} of ${money(total, inv.currency)}` : money(total, inv.currency);
+    const total = savedTotal(inv);
+    const credit = inv.docType === 'credit';
+    const credited = credit || inv.docType === 'quote' ? 0 : creditsTotal(list, num);
+    const status = invoiceStatus(inv, today, total, credited);
+    const owing = !credit && inv.docType !== 'quote' && status !== 'Paid' && status !== 'Credited' &&
+      (paymentsTotal(inv.payments) > 0 || credited > 0);
+    // A credit note shows as money going back: negative.
+    const amount = credit ? money(-total, inv.currency)
+      : owing ? `${money(balanceDue(total, inv.payments, credited), inv.currency)} of ${money(total, inv.currency)}` : money(total, inv.currency);
+    const label = credit ? (inv.creditFor ? `Credit for ${inv.creditFor}` : 'Credit note') : status || dueNote(inv);
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'ledger-row';
-    row.dataset.status = status.toLowerCase();
+    row.dataset.status = credit ? 'credit' : status.toLowerCase();
     if (num === openInvoice) row.setAttribute('aria-current', 'true');
     // textContent, not innerHTML: invoice data may come from an imported file.
     [[num, 'num'], [amount, 'amount'], [inv.toName || 'No client', 'client'],
-     [status || dueNote(inv), 'status']].forEach(([text, cls]) => {
+     [label, 'status']].forEach(([text, cls]) => {
       const span = document.createElement('span');
       span.className = `ledger-${cls}`;
       span.textContent = text;
@@ -413,8 +472,8 @@ function refreshInvoiceList() {
       row.append(span);
     });
     row.addEventListener('click', () => {
+      setOpenInvoice(num); // first: the sheet's Credited row is worked out from the open invoice
       applyData(inv);
-      setOpenInvoice(num);
       save();
       refreshInvoiceList();
       if (narrowScreen.matches) ledger.open = false;
@@ -424,6 +483,8 @@ function refreshInvoiceList() {
     return li;
   }));
   deleteInvoiceBtn.hidden = !list[openInvoice];
+  // Only a saved invoice can be credited: the credit note has to point at what was actually issued.
+  document.getElementById('creditNoteBtn').hidden = !(list[openInvoice] && (list[openInvoice].docType || 'invoice') === 'invoice');
 }
 
 document.getElementById('saveInvoiceBtn').addEventListener('click', () => {
@@ -431,15 +492,41 @@ document.getElementById('saveInvoiceBtn').addEventListener('click', () => {
   const num = data.invNumber.trim();
   if (!num) { alert('Add an invoice number before saving.'); return; }
   const list = getSavedList();
+  if (data.docType === 'credit' && !creditNoteOk(data, num, list)) return;
   // Re-saving the invoice you opened is fine; reusing another invoice's number would silently replace it.
   if (list[num] && openInvoice !== num &&
       !confirm(`${num}${list[num].toName ? ` (${list[num].toName})` : ''} is already saved. Replace it with this invoice? To keep both, press Cancel and change the invoice number.`)) return;
   list[num] = data;
   if (!store(LIST_KEY, JSON.stringify(list))) { alert('Couldn’t save — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
   setOpenInvoice(num);
+  recalc(); // credit notes may already point at this number
   refreshInvoiceList();
-  showDone(document.getElementById('saveInvoiceBtn'), 'Saved', `${isQuote() ? 'Quote' : 'Invoice'} ${num} saved`);
+  showDone(document.getElementById('saveInvoiceBtn'), 'Saved', `${capitalise(docName())} ${num} saved`);
 });
+
+// SARS wants a credit note to say why it was issued and which invoice it adjusts. It also can't credit more
+// than is left on that invoice. Alerts and returns false when the credit note can't be saved as it is.
+function creditNoteOk(data, num, list) {
+  if (!data.creditReason.trim()) {
+    alert('Add a reason before saving — a credit note must briefly say why it’s issued (e.g. goods returned, overcharged).');
+    document.getElementById('creditReason').focus();
+    return false;
+  }
+  if (!data.creditFor) {
+    alert('A credit note must be for a saved invoice. Open that invoice from your list and press Credit note.');
+    return false;
+  }
+  const total = savedTotal(data);
+  if (!(total > 0)) { alert('This credit note’s total is zero. Add the amounts you’re crediting as positive amounts.'); return false; }
+  // An invoice that's since been deleted can't be checked; the credit note can still be saved.
+  if (!list[data.creditFor]) return true;
+  const left = creditRemaining(list, data.creditFor, num); // `num` is about to be replaced, so don't count it twice
+  if (total > left) {
+    alert(`This credit note (${money(total, data.currency)}) is more than is left to credit on invoice ${data.creditFor} (${money(left, data.currency)}). Lower the amounts or remove lines.`);
+    return false;
+  }
+  return true;
+}
 
 // Briefly relabels a button and announces the result to screen readers. Not disabled meanwhile:
 // disabling a focused button can drop keyboard focus.
@@ -453,8 +540,13 @@ function showDone(btn, label, message) {
 
 deleteInvoiceBtn.addEventListener('click', () => {
   const num = openInvoice;
-  if (!num || !confirm(`Delete ${num} from your saved invoices? This can’t be undone. It stays on screen until you start a new invoice.`)) return;
+  if (!num) return;
   const list = getSavedList();
+  const credits = Object.keys(list).filter(n => list[n].docType === 'credit' && list[n].creditFor === num);
+  // Credit notes are tax documents in their own right, so they're kept — but say so.
+  const creditWarning = credits.length && list[num].docType !== 'credit'
+    ? ` Its credit note${credits.length === 1 ? '' : 's'} (${credits.join(', ')}) will stay saved, pointing at a deleted invoice.` : '';
+  if (!confirm(`Delete ${num} from your saved invoices? This can’t be undone. It stays on screen until you start a new invoice.${creditWarning}`)) return;
   delete list[num];
   store(LIST_KEY, JSON.stringify(list));
   setOpenInvoice('');
@@ -484,6 +576,7 @@ importInput.addEventListener('change', async () => {
   if (!confirm(`Import ${invoices} from this backup? Saved invoices with the same numbers will be replaced.`)) return;
   if (!store(LIST_KEY, JSON.stringify({ ...getSavedList(), ...backup.invoices }))) { alert('Couldn’t import — this browser’s storage is full. Delete some saved invoices and try again.'); return; }
   if (backup.logo && !load(LOGO_KEY)) setLogo(backup.logo);
+  recalc(); // imported credit notes may be against the open invoice
   refreshInvoiceList();
   showDone(document.getElementById('importBtn'), `Imported ${invoices}`, `Imported ${invoices}`);
 });
@@ -521,14 +614,17 @@ const payAmount = document.getElementById('payAmount');
 const payNote = document.getElementById('payNote');
 const paymentMsg = document.getElementById('paymentMsg');
 
-function showPayments(total, quote) {
-  const received = quote ? 0 : paymentsTotal(payments);
+// `noPayments`: quotes and credit notes. `credited`: saved credit notes against this invoice.
+function showPayments(total, noPayments, credited = 0) {
+  const received = noPayments ? 0 : paymentsTotal(payments);
   const fullyPaid = document.getElementById('paid').checked;
   document.getElementById('paidRow').hidden = !received;
-  document.getElementById('balanceRow').hidden = !received;
+  document.getElementById('creditedRow').hidden = !credited;
+  document.getElementById('balanceRow').hidden = !received && !credited;
   document.getElementById('paidAmount').textContent = money(-received);
+  document.getElementById('creditedAmount').textContent = money(-credited);
   // Ticking "Paid" settles the invoice outright, so it shouldn't print a balance as well.
-  document.getElementById('balanceAmount').textContent = money(fullyPaid ? 0 : balanceDue(total, payments));
+  document.getElementById('balanceAmount').textContent = money(fullyPaid ? 0 : balanceDue(total, received ? payments : [], credited));
 }
 
 function renderPayments() {

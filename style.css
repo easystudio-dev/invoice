@@ -12,6 +12,7 @@
   --paid: #2447c9;
   --overdue: #b8322a;
   --part: #8a5200;
+  --credit: #6b3fa0;
   --font: 'Instrument Sans', system-ui, sans-serif;
   --font-stamp: 'Anton', Impact, 'Arial Narrow', sans-serif;
 }
@@ -27,6 +28,7 @@
   --paid: #93a8ff;
   --overdue: #ff8f85;
   --part: #f0c36a;
+  --credit: #c9a8ff;
 }
 
 * { box-sizing: border-box; }
@@ -91,6 +93,9 @@ button:disabled { cursor: default; }
 /* Quotes aren't paid and have a validity date instead of payment terms; invoices aren't converted. */
 [data-doc="quote"] .paid-toggle, [data-doc="quote"] .terms-row, [data-doc="invoice"] #convertBtn,
 [data-doc="invoice"] .quote-status, [data-doc="quote"] .payments { display: none; }
+/* Credit notes aren't paid, have no terms and aren't quotes. */
+[data-doc="credit"] .paid-toggle, [data-doc="credit"] .terms-row, [data-doc="credit"] #convertBtn,
+[data-doc="credit"] .quote-status, [data-doc="credit"] .payments { display: none; }
 .quote-status { gap: 6px; }
 .quote-status select { border: none; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; }
 .quote-status:has(select:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -160,6 +165,7 @@ button:disabled { cursor: default; }
 .ledger-row[data-status="part paid"] .ledger-status { color: var(--part); font-weight: 600; }
 .ledger-row[data-status="accepted"] .ledger-status { color: var(--paid); font-weight: 600; }
 .ledger-row[data-status="declined"] .ledger-status { color: var(--overdue); font-weight: 600; }
+.ledger-row[data-status="credited"] .ledger-status, .ledger-row[data-status="credit"] .ledger-status { color: var(--credit); font-weight: 600; }
 
 /* --- Rail foot: backup, theme, small print --- */
 .rail-foot {
@@ -320,12 +326,23 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .stamp[data-status="expired"] { --stamp: #58606d; }
 .stamp[data-status="accepted"] { --stamp: #1d7a46; }
 .stamp[data-status="declined"] { --stamp: #b8322a; }
+.stamp[data-status="credited"] { --stamp: #6b3fa0; }
 .stamp.thunk { animation: thunk .32s cubic-bezier(.2, 1.4, .5, 1); }
 @keyframes thunk {
   from { transform: rotate(-4deg) scale(1.5); opacity: 0; }
   to { transform: rotate(-9deg) scale(1); opacity: .9; }
 }
 @media (prefers-reduced-motion: reduce) { .stamp.thunk { animation: none; } }
+
+/* --- Credit note: which invoice it adjusts and why (both print) --- */
+.credit-info { display: none; margin: 0 0 8px; padding: 10px 0 4px; border-top: 1px solid var(--line); }
+[data-doc="credit"] .credit-info { display: block; }
+.credit-ref { margin: 0 0 4px; padding-left: 6px; font-size: 14px; font-weight: 600; }
+.reason-row { display: flex; align-items: baseline; gap: 2px; }
+.reason-row label { flex-shrink: 0; padding-left: 6px; font-size: 14px; font-weight: 600; }
+/* grows with the text where supported; two rows otherwise */
+#creditReason { min-height: 0; resize: none; field-sizing: content; }
+#creditReason:placeholder-shown { border-color: var(--field-edge); }
 
 /* --- Line items --- */
 table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }

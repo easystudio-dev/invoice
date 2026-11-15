@@ -54,6 +54,7 @@
           </select>
         </label>
         <button id="convertBtn" type="button" class="btn">Convert to invoice</button>
+        <button id="creditNoteBtn" type="button" class="btn" hidden title="Start a credit note for this saved invoice">Credit note</button>
         <button id="deleteInvoiceBtn" type="button" class="btn btn-quiet" hidden>Delete</button>
         <p id="saveStatus" class="visually-hidden" role="status"></p>
       </div>
@@ -85,6 +86,7 @@
             <select id="docType">
               <option value="invoice" selected>Invoice</option>
               <option value="quote">Quote</option>
+              <option value="credit">Credit note</option>
             </select>
           </div>
           <div class="meta-row no-print">
@@ -119,7 +121,7 @@
               <option value="custom">Custom</option>
             </select>
           </div>
-          <div class="meta-row"><label for="dueDate">Due date</label><input id="dueDate" type="date"></div>
+          <div class="meta-row" id="dueRow"><label for="dueDate">Due date</label><input id="dueDate" type="date"></div>
         </div>
       </section>
 
@@ -131,6 +133,14 @@
           <datalist id="clientList"></datalist>
           <textarea id="toDetails" aria-label="Client address and VAT number" placeholder="Client address, email&#10;Client VAT No. (required on tax invoices over R5,000)"></textarea>
           <input id="toEmail" type="email" class="no-print" aria-label="Client email" placeholder="Client email (optional, used by Email)">
+        </div>
+      </section>
+
+      <section class="credit-info" id="creditInfo">
+        <p id="creditRef" class="credit-ref"></p>
+        <div class="reason-row">
+          <label for="creditReason">Reason:</label>
+          <textarea id="creditReason" rows="2" placeholder="Why you’re crediting this, e.g. goods returned, overcharged (required)"></textarea>
         </div>
       </section>
 
@@ -193,6 +203,7 @@
           </div>
           <div class="totals-row total-row"><span id="totalLabel">Total due</span><span id="grandTotal">R 0.00</span></div>
           <div class="totals-row payment-row" id="paidRow" hidden><span>Paid</span><span id="paidAmount">R 0.00</span></div>
+          <div class="totals-row payment-row" id="creditedRow" hidden><span>Credited</span><span id="creditedAmount">R 0.00</span></div>
           <div class="totals-row balance-row" id="balanceRow" hidden><span>Balance due</span><span id="balanceAmount">R 0.00</span></div>
           <div class="payments no-print" id="payments">
             <h3 class="payments-title">Payments received</h3>

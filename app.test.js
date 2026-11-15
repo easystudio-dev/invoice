@@ -388,3 +388,219 @@ test('payment data from an imported file is shown as text, not markup', () => {
   assert.strictEqual(d.querySelectorAll('#paymentList img').length, 0);
   assert.strictEqual(d.querySelectorAll('#paymentList li').length, 1);
 });
+
+// --- Credit notes ---
+// A saved VAT invoice, R100 + R50 standard-rated + 15% = R172.50, opened from the ledger.
+function creditFixture(extra = {}, seed = {}) {
+  const original = inv('INV-0003', { vatToggle: true, vatRate: '15', fromName: 'Me Studio', fromDetails: 'Cape Town', toName: 'Client',
+    toDetails: '1 Main Rd', toEmail: 'c@example.com', currency: 'ZAR', dueDate: '2099-01-01', terms: '7',
+    items: [{ desc: 'Design', qty: '1', unit: 'job', price: '100', vatCat: 'standard' }, { desc: 'Print', qty: '1', price: '50', vatCat: 'standard' }], ...extra });
+  const t = boot({ seed: { 'invoice-list': { 'INV-0003': original, ...seed } } });
+  const row = num => [...t.d.querySelectorAll('.ledger-row')].find(r => r.querySelector('.ledger-num').textContent === num);
+  row('INV-0003').click();
+  return { ...t, row };
+}
+const today = () => require('./lib.js').localISODate(new Date());
+
+test('credit note from a saved invoice copies it, numbers CN-0001, shows the reference and hides the due date', () => {
+  const { $, d, type, saved, w } = creditFixture({ vatInclusive: true, currency: 'USD',
+    items: [{ desc: 'Design', qty: '2', unit: 'hrs', price: '100', vatCat: 'standard' }, { desc: 'Books', qty: '1', price: '50', vatCat: 'zero' }] });
+  assert.ok(!$('#creditNoteBtn').hidden);
+  $('#creditNoteBtn').click();
+  assert.strictEqual($('#docType').value, 'credit');
+  assert.strictEqual(d.body.dataset.doc, 'credit');
+  assert.strictEqual($('#invNumber').value, 'CN-0001');
+  assert.strictEqual($('#invDate').value, today());
+  assert.strictEqual($('#creditRef').textContent, 'Credit note for invoice INV-0003');
+  assert.ok($('#dueRow').hidden);
+  assert.strictEqual($('#dueDate').value, '');
+  assert.strictEqual($('.doc-title').textContent, 'CREDIT NOTE'); // VAT on: still not "tax credit note"
+  assert.strictEqual($('label[for=invNumber]').textContent, 'Credit note #');
+  assert.strictEqual($('#newInvoiceBtn').textContent, 'New credit note');
+  assert.strictEqual($('#creditReason').value, '');
+  assert.strictEqual(d.activeElement, $('#creditReason'));
+  // copied: parties, currency, VAT settings, lines with their categories
+  assert.strictEqual($('#fromName').value, 'Me Studio');
+  assert.strictEqual($('#toName').value, 'Client');
+  assert.strictEqual($('#toDetails').value, '1 Main Rd');
+  assert.strictEqual($('#currency').value, 'USD');
+  assert.ok($('#vatToggle').checked && $('#vatInclusive').checked);
+  assert.strictEqual($('#vatRate').value, '15');
+  assert.deepStrictEqual([...d.querySelectorAll('.item-desc')].map(t => t.value), ['Design', 'Books']);
+  assert.deepStrictEqual([...d.querySelectorAll('.item-vatcat')].map(s => s.value), ['standard', 'zero']);
+  assert.strictEqual($('.item-unit').value, 'hrs');
+  assert.match($('#grandTotal').textContent, /250\.00/); // positive, same total as the invoice
+  assert.strictEqual($('#totalLabel').textContent, 'Total credit incl. VAT');
+  assert.ok($('#paidRow').hidden && $('#creditedRow').hidden && $('#balanceRow').hidden);
+  assert.ok($('#stamp').hidden);
+  // unsaved: nothing new in the list, Credit note / Delete gone
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0003']);
+  assert.ok($('#creditNoteBtn').hidden && $('#deleteInvoiceBtn').hidden);
+  type('#vatToggle', false);
+  assert.strictEqual($('.doc-title').textContent, 'CREDIT NOTE');
+  assert.strictEqual($('#totalLabel').textContent, 'Total credit');
+  $('#printBtn').click();
+  assert.strictEqual(d.title, 'Credit note CN-0001 - Client');
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('credit note needs a reason; saved with its reference and reason', () => {
+  const { $, type, saved, w } = creditFixture();
+  $('#creditNoteBtn').click();
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(w.alerts.length, 1);
+  assert.match(w.alerts[0], /reason/i);
+  assert.ok(!saved()['CN-0001']);
+  type('#creditReason', '   ');
+  $('#saveInvoiceBtn').click();
+  assert.ok(!saved()['CN-0001']);
+  type('#creditReason', 'Print job cancelled');
+  $('#saveInvoiceBtn').click();
+  const cn = saved()['CN-0001'];
+  assert.strictEqual(cn.docType, 'credit');
+  assert.strictEqual(cn.creditFor, 'INV-0003');
+  assert.strictEqual(cn.creditReason, 'Print job cancelled');
+  assert.strictEqual(cn.dueDate, '');
+  assert.strictEqual(w.alerts.length, 2);
+  assert.strictEqual(saved()['INV-0003'].docType, 'invoice'); // the original is untouched
+});
+
+test('credit note over what is left on the invoice is blocked', () => {
+  const { $, d, type, saved, w, row } = creditFixture();
+  $('#creditNoteBtn').click();
+  type('#creditReason', 'Overcharged');
+  type(d.querySelector('.item-price'), '101'); // 151 + VAT = 173.65 > 172.50
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(w.alerts.length, 1);
+  assert.match(w.alerts[0], /more than is left to credit on invoice INV-0003/);
+  assert.ok(!saved()['CN-0001']);
+  d.querySelectorAll('.del-row')[1].click(); // credit just the R100 line: 115
+  type(d.querySelector('.item-price'), '100');
+  $('#saveInvoiceBtn').click();
+  assert.ok(saved()['CN-0001']);
+  // a second credit note may only take the remaining 57.50
+  row('INV-0003').click();
+  $('#creditNoteBtn').click();
+  assert.strictEqual($('#invNumber').value, 'CN-0002');
+  type('#creditReason', 'Again');
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(w.alerts.length, 2);
+  assert.ok(!saved()['CN-0002']);
+  d.querySelectorAll('.del-row')[0].click(); // the R50 line only: 57.50, exactly what's left
+  $('#saveInvoiceBtn').click();
+  assert.ok(saved()['CN-0002']);
+  assert.strictEqual(w.alerts.length, 2);
+  // re-saving the opened CN-0001 doesn't count its own old copy
+  row('CN-0001').click();
+  type('#creditReason', 'Overcharged on design');
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(saved()['CN-0001'].creditReason, 'Overcharged on design');
+  assert.strictEqual(w.alerts.length, 2);
+});
+
+test('saving a credit note lowers the invoice balance in the ledger and on its sheet; full credit is Credited', () => {
+  const { $, d, type, w, row } = creditFixture();
+  $('#creditNoteBtn').click();
+  type('#creditReason', 'Print cancelled');
+  d.querySelectorAll('.del-row')[0].click(); // credit the R50 line: 57.50
+  $('#saveInvoiceBtn').click();
+  assert.match(row('CN-0001').querySelector('.ledger-amount').textContent, /^-R\s*57[,.]50$/);
+  assert.strictEqual(row('CN-0001').querySelector('.ledger-status').textContent, 'Credit for INV-0003');
+  assert.strictEqual(row('CN-0001').dataset.status, 'credit');
+  assert.match(row('INV-0003').querySelector('.ledger-amount').textContent, /115[,.]00.*of.*172[,.]50/);
+  // the original's sheet: Credited row under Paid, balance accounts for it, no stamp
+  row('INV-0003').click();
+  assert.ok(!$('#creditedRow').hidden && !$('#balanceRow').hidden && $('#paidRow').hidden);
+  assert.match($('#creditedAmount').textContent, /-R\s*57[,.]50/);
+  assert.match($('#balanceAmount').textContent, /115[,.]00/);
+  assert.ok($('#stamp').hidden);
+  // credit + payment covering the rest: Paid
+  addPay({ $, type }, '100');
+  assert.strictEqual(row('INV-0003').querySelector('.ledger-status').textContent, 'Part paid');
+  addPay({ $, type }, '15');
+  assert.strictEqual($('#stamp').textContent, 'Paid');
+  assert.strictEqual(row('INV-0003').querySelector('.ledger-status').textContent, 'Paid');
+  // full credit on its own: Credited
+  d.querySelectorAll('#paymentList .del-row')[0].click();
+  d.querySelectorAll('#paymentList .del-row')[0].click();
+  $('#creditNoteBtn').click();
+  type('#creditReason', 'Design cancelled too');
+  d.querySelectorAll('.del-row')[1].click(); // the R100 line: 115
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(row('INV-0003').querySelector('.ledger-status').textContent, 'Credited');
+  assert.strictEqual(row('INV-0003').dataset.status, 'credited');
+  assert.match(row('INV-0003').querySelector('.ledger-amount').textContent, /^R\s*172[,.]50$/);
+  row('INV-0003').click();
+  assert.strictEqual($('#stamp').textContent, 'Credited');
+  assert.match($('#balanceAmount').textContent, /^R\s*0[,.]00$/);
+  assert.strictEqual(w.alerts.length, 0);
+});
+
+test('credit notes for another invoice do not touch this one', () => {
+  const other = inv('INV-0001');
+  const cn = inv('CN-0001', { docType: 'credit', creditFor: 'INV-0001', creditReason: 'x', items: [{ qty: '1', price: '100' }] });
+  const { $, row } = creditFixture({}, { 'INV-0001': other, 'CN-0001': cn });
+  assert.ok($('#creditedRow').hidden);
+  assert.match(row('INV-0003').querySelector('.ledger-amount').textContent, /^R\s*172[,.]50$/);
+  assert.strictEqual(row('INV-0001').querySelector('.ledger-status').textContent, 'Credited');
+});
+
+test('Credit note button only for a saved invoice, not drafts, quotes or credit notes', () => {
+  const quote = inv('QUO-0001', { docType: 'quote' });
+  const cn = inv('CN-0001', { docType: 'credit', creditFor: 'INV-0003', creditReason: 'x', items: [{ qty: '1', price: '10' }] });
+  const { $, type, row } = creditFixture({}, { 'QUO-0001': quote, 'CN-0001': cn });
+  assert.ok(!$('#creditNoteBtn').hidden);
+  $('#newInvoiceBtn').click();
+  assert.ok($('#creditNoteBtn').hidden); // unsaved draft
+  row('QUO-0001').click();
+  assert.ok($('#creditNoteBtn').hidden);
+  row('CN-0001').click();
+  assert.ok($('#creditNoteBtn').hidden);
+  assert.strictEqual($('#creditRef').textContent, 'Credit note for invoice INV-0003');
+  row('INV-0003').click();
+  type('#docType', 'quote');
+  assert.ok($('#creditNoteBtn').hidden);
+});
+
+test('fresh app: no Credit note button; choosing Credit note type on a saved invoice credits it', () => {
+  const fresh = boot();
+  assert.ok(fresh.$('#creditNoteBtn').hidden);
+  const { $, type } = creditFixture();
+  type('#docType', 'credit');
+  assert.strictEqual($('#invNumber').value, 'CN-0001');
+  assert.strictEqual($('#creditRef').textContent, 'Credit note for invoice INV-0003');
+  assert.strictEqual($('#toName').value, 'Client');
+});
+
+test('a credit note not linked to an invoice cannot be saved', () => {
+  const { $, type, saved, w } = boot();
+  type('#docType', 'credit');
+  assert.strictEqual($('#invNumber').value, 'CN-0001');
+  type('#creditReason', 'Returned');
+  type($('.item-price'), '10');
+  $('#saveInvoiceBtn').click();
+  assert.match(w.alerts[0], /must be for a saved invoice/);
+  assert.deepStrictEqual(saved(), {});
+});
+
+test('deleting an invoice with credit notes warns and keeps them', () => {
+  const cn = inv('CN-0001', { docType: 'credit', creditFor: 'INV-0003', creditReason: 'x', items: [{ qty: '1', price: '10' }] });
+  const { $, w, saved } = creditFixture({}, { 'CN-0001': cn });
+  let asked = '';
+  w.confirm = msg => { asked = msg; return true; };
+  $('#deleteInvoiceBtn').click();
+  assert.match(asked, /credit note \(CN-0001\) will stay saved, pointing at a deleted invoice/);
+  assert.deepStrictEqual(Object.keys(saved()), ['CN-0001']);
+});
+
+test('old saved invoice without credit fields opens cleanly', () => {
+  const { $, d, w } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } });
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual($('#docType').value, 'invoice');
+  assert.strictEqual($('#creditReason').value, '');
+  assert.ok($('#creditedRow').hidden && $('#balanceRow').hidden);
+  assert.ok(!$('#creditNoteBtn').hidden && !$('#dueRow').hidden);
+  assert.strictEqual($('.doc-title').textContent, 'INVOICE');
+  assert.strictEqual(d.querySelector('.ledger-status').textContent, '');
+  assert.strictEqual(w.alerts.length, 0);
+});

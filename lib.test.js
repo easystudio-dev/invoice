@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, invoiceStatus } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus } = require('./lib.js');
 
 // The fields invoiceTotals returned before VAT categories existed (it now also returns `categories`).
 const legacy = ({ lineTotals, subtotal, discount, net, vat, total }) => ({ lineTotals, subtotal, discount, net, vat, total });
@@ -316,4 +316,83 @@ test('every breakdown reconciles to the cent across awkward amounts', () => {
     }
   }
   assert.strictEqual(checked, 5 * 3 * 3 * 2 * 4);
+});
+
+// --- Credit notes ---
+const doc = (extra = {}) => ({ docType: 'invoice', vatToggle: true, vatRate: '15', items: [{ qty: '1', price: '100' }], ...extra }); // R115 incl. VAT
+const cn = (creditFor, price, extra = {}) => doc({ docType: 'credit', creditFor, items: [{ qty: '1', price }], ...extra });
+
+test('nextFreeNumber: credit notes have their own CN sequence', () => {
+  assert.strictEqual(nextFreeNumber({}, 'credit'), 'CN-0001');
+  const list = { 'INV-0005': doc(), 'QUO-0002': doc({ docType: 'quote' }), 'CN-0003': cn('INV-0005', '10') };
+  assert.strictEqual(nextFreeNumber(list, 'credit'), 'CN-0004');
+  assert.strictEqual(nextFreeNumber(list, 'invoice'), 'INV-0006');
+  assert.strictEqual(nextFreeNumber(list, 'quote'), 'QUO-0003');
+  assert.strictEqual(nextFreeNumber(list, 'credit', 'CN-0009'), 'CN-0010');
+});
+
+test('savedTotal matches the sheet maths (VAT, inclusive, discount)', () => {
+  assert.strictEqual(savedTotal(doc()), 115);
+  assert.strictEqual(savedTotal(doc({ vatToggle: false })), 100);
+  assert.strictEqual(savedTotal(doc({ vatInclusive: true })), 100);
+  assert.strictEqual(savedTotal(doc({ discountType: 'percent', discountValue: '10' })), 103.5);
+  assert.strictEqual(savedTotal({}), 0);
+});
+
+test('creditsTotal sums only saved credit notes for that invoice', () => {
+  const list = {
+    'INV-0001': doc(), 'INV-0002': doc(),
+    'CN-0001': cn('INV-0001', '20'), // 23 incl. VAT
+    'CN-0002': cn('INV-0001', '10'), // 11.50
+    'CN-0003': cn('INV-0002', '50'), // other invoice
+    'INV-0003': doc({ creditFor: 'INV-0001' }), // not a credit note
+    'QUO-0001': doc({ docType: 'quote', creditFor: 'INV-0001' }),
+  };
+  assert.strictEqual(creditsTotal(list, 'INV-0001'), 34.5);
+  assert.strictEqual(creditsTotal(list, 'INV-0002'), 57.5);
+  assert.strictEqual(creditsTotal(list, 'INV-0003'), 0);
+  assert.strictEqual(creditsTotal(list, 'INV-0001', 'CN-0002'), 23); // the one being re-saved is left out
+  assert.strictEqual(creditsTotal(list, ''), 0);
+  assert.strictEqual(creditsTotal(undefined, 'INV-0001'), 0);
+});
+
+test('creditRemaining: original total less credits already issued; over-credit check', () => {
+  const list = { 'INV-0001': doc(), 'CN-0001': cn('INV-0001', '60') }; // 115 − 69
+  assert.strictEqual(creditRemaining(list, 'INV-0001'), 46);
+  const overCredit = (note, num) => savedTotal(note) > creditRemaining(list, note.creditFor, num);
+  assert.strictEqual(overCredit(cn('INV-0001', '40'), 'CN-0002'), false); // 46 exactly
+  assert.strictEqual(overCredit(cn('INV-0001', '40.01'), 'CN-0002'), true);
+  assert.strictEqual(overCredit(cn('INV-0001', '100'), 'CN-0001'), false); // re-saving CN-0001 replaces it
+  assert.strictEqual(overCredit(cn('INV-0001', '100.01'), 'CN-0001'), true);
+  assert.strictEqual(creditRemaining({ ...list, 'CN-0002': cn('INV-0001', '50') }, 'INV-0001'), 0); // never negative
+  assert.strictEqual(creditRemaining(list, 'INV-0404'), 0);
+});
+
+test('balanceDue takes credits off as well as payments', () => {
+  assert.strictEqual(balanceDue(115, [], 23), 92);
+  assert.strictEqual(balanceDue(115, [{ amount: '50' }], 23), 42);
+  assert.strictEqual(balanceDue(115, [{ amount: '100' }], 23), 0);
+  assert.strictEqual(balanceDue(115, [{ amount: '50' }]), 65); // old two-argument call
+});
+
+test('invoiceStatus with credits: partial, full, credit + payment, overdue', () => {
+  const today = '2026-11-15';
+  const open = { dueDate: '2026-12-01', payments: [] };
+  assert.strictEqual(invoiceStatus(open, today, 115, 23), ''); // part credit alone: no status, just a lower balance
+  assert.strictEqual(invoiceStatus({ ...open, dueDate: '2026-11-01' }, today, 115, 23), 'Overdue');
+  assert.strictEqual(invoiceStatus(open, today, 115, 115), 'Credited');
+  assert.strictEqual(invoiceStatus(open, today, 115, 120), 'Credited');
+  assert.strictEqual(invoiceStatus({ ...open, dueDate: '2026-11-01' }, today, 115, 115), 'Credited');
+  assert.strictEqual(invoiceStatus({ ...open, payments: [{ amount: '92' }] }, today, 115, 23), 'Paid');
+  assert.strictEqual(invoiceStatus({ ...open, payments: [{ amount: '50' }] }, today, 115, 23), 'Part paid');
+  assert.strictEqual(invoiceStatus({ ...open, payments: [{ amount: '115' }] }, today, 115, 115), 'Credited'); // fully credited wins
+  assert.strictEqual(invoiceStatus({ ...open, paid: true }, today, 115, 23), 'Paid');
+  assert.strictEqual(invoiceStatus(open, today, undefined, 115), ''); // credits need the total
+  assert.strictEqual(invoiceStatus(open, today, 115), ''); // no credits argument: as before
+  // float: 0.1 + 0.2 of credit + payment covers 0.30
+  assert.strictEqual(invoiceStatus({ ...open, payments: [{ amount: '0.1' }] }, today, 0.3, 0.2), 'Paid');
+});
+
+test('invoiceStatus: credit notes have no status of their own', () => {
+  assert.strictEqual(invoiceStatus({ docType: 'credit', dueDate: '2020-01-01', paid: true }, '2026-11-15', 115), '');
 });
