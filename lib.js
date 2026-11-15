@@ -42,6 +42,16 @@ function nextNumberAfter(numbers, fallback) {
   return numbers.length ? nextInvoiceNumber([...numbers].sort().pop()) : fallback;
 }
 
+// Next free number in `type`'s sequence ('invoice' or 'quote'): one past the highest saved one,
+// or past `current` when that's higher (e.g. an unsaved draft), and never a number already saved.
+function nextFreeNumber(list, type, current = '') {
+  const sameType = Object.keys(list).filter(num => (list[num].docType || 'invoice') === type);
+  if (current) sameType.push(current);
+  let num = nextNumberAfter(sameType, type === 'quote' ? 'QUO-0001' : 'INV-0001');
+  while (list[num]) num = nextInvoiceNumber(num);
+  return num;
+}
+
 // today is YYYY-MM-DD; ISO dates compare correctly as strings. A quote's dueDate is its "valid until".
 function invoiceStatus(inv, today) {
   const late = inv.dueDate && inv.dueDate < today;
@@ -51,4 +61,4 @@ function invoiceStatus(inv, today) {
   return '';
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, invoiceTotals, nextInvoiceNumber, nextNumberAfter, invoiceStatus };
+if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus };

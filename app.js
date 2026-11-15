@@ -102,6 +102,11 @@ function store(key, value) {
   try { localStorage.setItem(key, value); return true; } catch { return false; }
 }
 
+// Reading throws too when the browser blocks storage (some private windows, blocked site data).
+function load(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
 function save() {
   store(STORAGE_KEY, JSON.stringify(collectData()));
 }
@@ -173,7 +178,7 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
   const data = collectData();
   applyData({
     ...data,
-    invNumber: nextInvoiceNumber(data.invNumber.trim()),
+    invNumber: nextFreeNumber(getSavedList(), docName(), data.invNumber.trim()),
     invDate: localISODate(new Date()),
     dueDate: '',
     toName: '', toDetails: '', toEmail: '', paid: false,
@@ -203,10 +208,8 @@ invDateInput.addEventListener('input', applyDueDate);
 // --- Quotes ---
 // Switching type makes it a new, unsaved document numbered in its own sequence (QUO-… / INV-…).
 function switchDocType(type) {
-  const list = getSavedList();
-  const sameType = Object.keys(list).filter(num => (list[num].docType || 'invoice') === type);
   document.getElementById('docType').value = type;
-  document.getElementById('invNumber').value = nextNumberAfter(sameType, type === 'quote' ? 'QUO-0001' : 'INV-0001');
+  document.getElementById('invNumber').value = nextFreeNumber(getSavedList(), type);
   document.getElementById('paid').checked = false;
   applyDueDate();
   setOpenInvoice('');
@@ -235,14 +238,14 @@ const ledger = document.getElementById('ledger');
 // The saved invoice currently on the sheet ('' = unsaved draft). Persisted so a reload doesn't
 // make re-saving it look like a clash with another invoice.
 const OPEN_KEY = 'invoice-open';
-let openInvoice = localStorage.getItem(OPEN_KEY) || '';
+let openInvoice = load(OPEN_KEY) || '';
 function setOpenInvoice(num) {
   openInvoice = num;
   store(OPEN_KEY, num);
 }
 
 function getSavedList() {
-  return safeParse(localStorage.getItem(LIST_KEY), {});
+  return safeParse(load(LIST_KEY), {});
 }
 
 function shortDate(iso) {
@@ -356,7 +359,7 @@ deleteInvoiceBtn.addEventListener('click', () => {
 
 // --- Backup (localStorage is wiped with browser data, so let people keep a file) ---
 document.getElementById('exportBtn').addEventListener('click', () => {
-  const backup = { invoices: getSavedList(), logo: localStorage.getItem(LOGO_KEY) };
+  const backup = { invoices: getSavedList(), logo: load(LOGO_KEY) };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
   a.download = `invoices-backup-${localISODate(new Date())}.json`;
@@ -376,7 +379,7 @@ importInput.addEventListener('change', async () => {
   const invoices = `${count} invoice${count === 1 ? '' : 's'}`;
   if (!confirm(`Import ${invoices} from this backup? Saved invoices with the same numbers will be replaced.`)) return;
   if (!store(LIST_KEY, JSON.stringify({ ...getSavedList(), ...backup.invoices }))) { alert('Couldn’t import — this browser’s storage is full. Delete some saved invoices and try again.'); return; }
-  if (backup.logo && !localStorage.getItem(LOGO_KEY)) setLogo(backup.logo);
+  if (backup.logo && !load(LOGO_KEY)) setLogo(backup.logo);
   refreshInvoiceList();
   showDone(document.getElementById('importBtn'), `Imported ${invoices}`, `Imported ${invoices}`);
 });
@@ -387,8 +390,9 @@ document.getElementById('paid').addEventListener('change', (e) => {
   const stamp = document.getElementById('stamp');
   stamp.classList.remove('thunk');
   if (e.target.checked) { void stamp.offsetWidth; stamp.classList.add('thunk'); } // restart the animation
+  // The saved invoice that's open, not the number typed on screen — an unsaved draft can share a saved one's number.
   const list = getSavedList();
-  const num = document.getElementById('invNumber').value.trim();
+  const num = openInvoice;
   if (!list[num]) return;
   list[num].paid = e.target.checked;
   store(LIST_KEY, JSON.stringify(list));
@@ -405,7 +409,7 @@ const logoPreview = document.getElementById('logoPreview');
 const logoRemove = document.getElementById('logoRemove');
 
 function setLogo(dataUrl) {
-  if (!dataUrl) localStorage.removeItem(LOGO_KEY);
+  if (!dataUrl) { try { localStorage.removeItem(LOGO_KEY); } catch {} }
   else if (!store(LOGO_KEY, dataUrl)) { alert('Couldn’t add the logo — not enough browser storage. Try a smaller image (under 200 KB works best).'); return; }
   logoPreview.src = dataUrl || '';
   logoPreview.hidden = logoRemove.hidden = !dataUrl;
@@ -436,14 +440,14 @@ logoRemove.addEventListener('click', () => setLogo(null));
 );
 logoDrop.addEventListener('drop', (e) => loadLogoFile(e.dataTransfer.files[0]));
 
-const draft = safeParse(localStorage.getItem(STORAGE_KEY), null);
+const draft = safeParse(load(STORAGE_KEY), null);
 if (draft) applyData(draft);
 if (!invDateInput.value) invDateInput.value = localISODate(new Date());
 if (!draft) {
   addItem();
   applyDueDate();
 }
-const savedLogo = localStorage.getItem(LOGO_KEY);
+const savedLogo = load(LOGO_KEY);
 if (savedLogo) setLogo(savedLogo);
 // Phones: ledger starts folded so the invoice is the first thing on screen.
 const narrowScreen = matchMedia('(max-width: 900px)');

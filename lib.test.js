@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { localISODate, addDays, safeParse, round2, invoiceTotals, nextInvoiceNumber, nextNumberAfter, invoiceStatus } = require('./lib.js');
+const { localISODate, addDays, safeParse, round2, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, invoiceStatus } = require('./lib.js');
 
 test('invoiceStatus: paid wins, overdue only after the due date', () => {
   assert.strictEqual(invoiceStatus({ paid: true, dueDate: '2026-01-01' }, '2026-10-21'), 'Paid');
@@ -17,6 +17,21 @@ test('invoiceStatus: quotes expire instead of going overdue, and are never paid'
 test('nextNumberAfter continues from the highest number', () => {
   assert.strictEqual(nextNumberAfter(['INV-0002', 'INV-0010', 'INV-0009'], 'INV-0001'), 'INV-0011');
   assert.strictEqual(nextNumberAfter([], 'QUO-0001'), 'QUO-0001');
+});
+
+test('nextFreeNumber never reuses a saved number', () => {
+  const list = {
+    'INV-0003': {}, 'INV-0004': { docType: 'invoice' }, 'QUO-0001': { docType: 'quote' },
+  };
+  // New from old INV-0003: skips past the saved INV-0004
+  assert.strictEqual(nextFreeNumber(list, 'invoice', 'INV-0003'), 'INV-0005');
+  // Unsaved draft ahead of the saved ones keeps its own sequence
+  assert.strictEqual(nextFreeNumber(list, 'invoice', 'INV-0010'), 'INV-0011');
+  // Quotes count only quotes
+  assert.strictEqual(nextFreeNumber(list, 'quote'), 'QUO-0002');
+  assert.strictEqual(nextFreeNumber({}, 'quote'), 'QUO-0001');
+  // Fallback number already taken by a document of the other type
+  assert.strictEqual(nextFreeNumber({ 'INV-0001': { docType: 'quote' } }, 'invoice'), 'INV-0002');
 });
 
 test('round2 rounds half away from zero despite float error', () => {
