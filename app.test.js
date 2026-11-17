@@ -1277,3 +1277,99 @@ test('Save still works where the storage API is missing or throws', async () => 
   await tick(10);
   assert.strictEqual(Object.keys(saved()).length, 1);
 });
+
+// --- IndexedDB storage and edit times ---
+const { newIdb } = require('./test-helpers.js');
+const { createStorage } = require('./storage.js');
+const readIdb = async (idb) => { const s = createStorage({ indexedDB: idb, ls: { get: () => null, set: () => true, remove() {} } }); return s.load(); };
+
+test('with IndexedDB the page waits for the saved list, then shows it', async () => {
+  const idb = newIdb();
+  const first = createStorage({ indexedDB: idb, ls: { get: () => null, set: () => true, remove() {} } });
+  await first.load();
+  first.setList(JSON.stringify({ 'INV-0007': inv('INV-0007') }), true);
+  first.setLogo('data:image/png;base64,AAAA');
+  await first.flush();
+
+  const { $, d, w, ready } = boot({ idb });
+  assert.strictEqual($('.app').inert, true);
+  await ready();
+  assert.strictEqual($('.app').inert, false);
+  assert.ok([...d.querySelectorAll('.ledger-row')].some(r => r.textContent.includes('INV-0007')));
+  assert.strictEqual($('#logoPreview').hidden, false);
+});
+
+test('with IndexedDB, Save lands in the database with an edit time, and deleting removes it', async () => {
+  const idb = newIdb();
+  const { $, d, type, ready } = boot({ idb });
+  await ready();
+  type('#fromName', 'Me');
+  type('#invNumber', 'INV-0042');
+  const before = Date.now();
+  $('#saveInvoiceBtn').click();
+  await tick(50);
+  let db = await readIdb(idb);
+  assert.deepStrictEqual(Object.keys(db.list), ['INV-0042']);
+  assert.ok(db.list['INV-0042'].updatedAt >= before);
+
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0042')).click();
+  $('#deleteInvoiceBtn').click();
+  await tick(50);
+  db = await readIdb(idb);
+  assert.deepStrictEqual(db.list, {});
+});
+
+test('with IndexedDB, existing localStorage documents are moved over on first load', async () => {
+  const idb = newIdb();
+  const { $, d, w, ready } = boot({ idb, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003') }, 'invoice-logo': 'data:image/png;base64,BBBB' } });
+  await ready();
+  assert.ok([...d.querySelectorAll('.ledger-row')].some(r => r.textContent.includes('INV-0003')));
+  assert.strictEqual(w.localStorage.getItem('invoice-list'), null);
+  assert.strictEqual(w.localStorage.getItem('invoice-logo'), null);
+  assert.strictEqual($('#logoPreview').hidden, false);
+  const db = await readIdb(idb);
+  assert.deepStrictEqual(Object.keys(db.list), ['INV-0003']);
+  assert.strictEqual(db.logo, 'data:image/png;base64,BBBB');
+});
+
+test('with a broken IndexedDB the app still starts and saves to localStorage', async () => {
+  const { $, d, saved, type, ready } = boot({ idb: { open() { throw new Error('nope'); } }, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003') } } });
+  await ready();
+  assert.ok([...d.querySelectorAll('.ledger-row')].some(r => r.textContent.includes('INV-0003')));
+  type('#invNumber', 'INV-0004');
+  $('#saveInvoiceBtn').click();
+  assert.deepStrictEqual(Object.keys(saved()).sort(), ['INV-0003', 'INV-0004']);
+});
+
+test('saving stamps updatedAt; re-saving unchanged keeps it; marking paid moves it', async () => {
+  const { $, d, type, saved } = boot();
+  type('#invNumber', 'INV-0042');
+  $('#saveInvoiceBtn').click();
+  const first = saved()['INV-0042'].updatedAt;
+  assert.strictEqual(typeof first, 'number');
+  await tick(5);
+  $('#saveInvoiceBtn').click();
+  assert.strictEqual(saved()['INV-0042'].updatedAt, first);
+  await tick(5);
+  type('#paid', true);
+  assert.ok(saved()['INV-0042'].updatedAt > first);
+});
+
+test('folder merge: the newer copy wins without asking; a backup import keeps its own edit times', async () => {
+  const dir = fakeDir();
+  dir.put('X/INV-0001.json', JSON.stringify({ ...inv('INV-0001', { toName: 'X', notes: 'folder newer' }), updatedAt: 2000 }));
+  dir.put('X/INV-0002.json', JSON.stringify({ ...inv('INV-0002', { toName: 'X', notes: 'folder older' }), updatedAt: 1000 }));
+  const seed = { 'invoice-list': {
+    'INV-0001': { ...inv('INV-0001', { toName: 'X', notes: 'local older' }), updatedAt: 1000 },
+    'INV-0002': { ...inv('INV-0002', { toName: 'X', notes: 'local newer' }), updatedAt: 2000 } } };
+  const asked = [];
+  const { $, w, saved } = boot({ folder: dir, seed });
+  w.confirm = m => { asked.push(m); return true; };
+  $('#folderBtn').click();
+  await tick(400);
+  assert.deepStrictEqual(asked, []);
+  assert.strictEqual(saved()['INV-0001'].notes, 'folder newer');
+  assert.strictEqual(saved()['INV-0001'].updatedAt, 2000);
+  assert.strictEqual(saved()['INV-0002'].notes, 'local newer');
+  assert.strictEqual(JSON.parse(dir.files()['X/INV-0002.json']).notes, 'local newer');
+});

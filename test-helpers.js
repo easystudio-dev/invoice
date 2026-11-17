@@ -8,7 +8,7 @@ const html = read('index.html').replace(/<script[\s\S]*?<\/script>/g, '');
 
 // seed: localStorage entries set before the app starts. confirm: answer for confirm() dialogs.
 // folder: a fakeDir() the folder picker will hand back (Chromium's showDirectoryPicker).
-function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false, folder = null, userAgent = null } = {}) {
+function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false, folder = null, userAgent = null, idb = null } = {}) {
   const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only' });
   const w = dom.window;
   if (userAgent) Object.defineProperty(w.navigator, 'userAgent', { value: userAgent });
@@ -23,9 +23,11 @@ function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false,
       get() { throw new w.DOMException('The operation is insecure.', 'SecurityError'); },
     });
   }
-  if (folder) { w.showDirectoryPicker = async () => folder; w.indexedDB = {}; }
+  if (folder) w.showDirectoryPicker = async () => folder;
+  if (idb) w.indexedDB = idb; // a fake IndexedDB (see newIdb): the app then loads asynchronously, wait for ready()
   w.eval(read('lib.js'));
   w.eval(read('folder.js'));
+  w.eval(read('storage.js'));
   w.eval(read('vendor/qrcode.js'));
   w.eval(read('app.js'));
   const d = w.document;
@@ -38,7 +40,9 @@ function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false,
     el.dispatchEvent(new w.Event('change', { bubbles: true }));
   };
   const saved = () => JSON.parse(w.localStorage.getItem('invoice-list') || '{}');
-  return { w, d, $, type, saved };
+  // Resolves once the saved list is loaded and the page is usable (immediately without IndexedDB).
+  const ready = async () => { for (let i = 0; i < 400 && $('.app').inert; i++) await new Promise(r => setTimeout(r, 5)); };
+  return { w, d, $, type, saved, ready };
 }
 
 // A saved-invoice record as the app stores it.
@@ -104,4 +108,7 @@ function fakeFile(name, shared) {
   return f;
 }
 
-module.exports = { boot, inv, fakeDir };
+const { IDBFactory } = require('fake-indexeddb');
+const newIdb = () => new IDBFactory();
+
+module.exports = { boot, inv, fakeDir, newIdb };

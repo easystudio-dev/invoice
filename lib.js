@@ -411,20 +411,56 @@ function parseFolderDoc(text, stem) {
   return [num, doc];
 }
 
-// Combines this browser's saved list with the documents found in a folder. Documents in only one place are
-// kept. When both have a number with different contents it is a conflict: `preferFolder` picks the folder's copy,
-// otherwise this browser's copy stays.
-function mergeLists(local, folder, preferFolder) {
+// --- Edit times ---
+// Every saved document carries `updatedAt` (ms since 1970): when it last really changed. It is what lets two
+// copies of a document be compared, so the newer one wins when a folder and this browser disagree.
+
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// `next` is the list about to be saved, `prev` what is saved now. A document that is new or whose content changed
+// gets `updatedAt: now` (always after its previous stamp, so two edits in one millisecond still order). One whose
+// content is the same keeps its old stamp, so re-saving without changes changes nothing. `keep` leaves the stamps
+// exactly as given: used when documents arrive from elsewhere (a backup, a folder) with times of their own.
+function stampChanges(prev, next, now, keep) {
+  const out = {};
+  Object.keys(next || {}).forEach(num => {
+    if (UNSAFE_KEYS.includes(num)) return;
+    const doc = next[num];
+    if (keep || !doc || typeof doc !== 'object' || Array.isArray(doc)) { out[num] = doc; return; }
+    const old = prev && Object.prototype.hasOwnProperty.call(prev, num) && prev[num] && typeof prev[num] === 'object' ? prev[num] : null;
+    const { updatedAt, ...rest } = doc;
+    const { updatedAt: oldAt, ...oldRest } = old || {};
+    const had = typeof oldAt === 'number' ? oldAt : undefined;
+    if (!old || JSON.stringify(rest) !== JSON.stringify(oldRest)) out[num] = { ...rest, updatedAt: Math.max(now, (had ?? 0) + 1) };
+    else out[num] = had !== undefined ? { ...rest, updatedAt: had } : doc;
+  });
+  return out;
+}
+
+const editTime = doc => (doc && typeof doc.updatedAt === 'number' ? doc.updatedAt : 0);
+
+// Combines this browser's saved list with the documents found in a folder. A document in only one place is kept.
+// When both have a number but different contents, the newer `updatedAt` wins. When neither is newer (the same
+// stamp, or no stamps because they were saved before times were recorded) it is a conflict: `ties` ('folder' or
+// 'local') says whose copy to keep. Returns { merged, imported (new from the folder), replaced (folder's copy won),
+// conflicts (the ties) }.
+function mergeLists(local, folder, ties) {
   const merged = { ...local };
   const imported = [];
+  const replaced = [];
   const conflicts = [];
   Object.keys(folder || {}).forEach(num => {
+    if (UNSAFE_KEYS.includes(num)) return;
     if (!Object.prototype.hasOwnProperty.call(local, num)) { merged[num] = folder[num]; imported.push(num); return; }
     if (JSON.stringify(local[num]) === JSON.stringify(folder[num])) return;
+    const a = editTime(local[num]);
+    const b = editTime(folder[num]);
+    if (b > a) { merged[num] = folder[num]; replaced.push(num); return; }
+    if (b < a) return;
     conflicts.push(num);
-    if (preferFolder) merged[num] = folder[num];
+    if (ties === 'folder') { merged[num] = folder[num]; replaced.push(num); }
   });
-  return { merged, imported, conflicts };
+  return { merged, imported, replaced, conflicts };
 }
 
 // --- SARS tax-invoice advisory ---
@@ -495,4 +531,4 @@ function parseBackup(text) {
   return { invoices, logo: typeof data.logo === 'string' ? data.logo : null };
 }
 
-if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };
+if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, stampChanges, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

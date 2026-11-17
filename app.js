@@ -1,4 +1,6 @@
 const STORAGE_KEY = 'invoice-draft';
+const LIST_KEY = 'invoice-list';
+const LOGO_KEY = 'invoice-logo';
 
 const itemsBody = document.getElementById('itemsBody');
 const fields = ['fromName','fromDetails','toName','toDetails','toEmail','invNumber','invDate','dueDate','notes','vatToggle','vatRate','currency','terms','paid','docType','discountType','discountValue','vatInclusive','quoteStatus','creditReason','repeat','bankName','bankHolder','bankAccount','bankBranch','bankType','payLink'];
@@ -314,17 +316,42 @@ function applyData(data) {
   recalc();
 }
 
-// localStorage throws when full (e.g. big logo + many saved invoices) — don't let that break the app.
+// Small settings and the unsaved draft live in localStorage. It throws when full (or when the browser blocks it),
+// so reads and writes never let that break the app.
+const lsAdapter = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); return true; } catch { return false; } },
+  remove(key) { try { localStorage.removeItem(key); } catch { /* nothing to remove */ } },
+};
+
+// Saved documents and the logo live in IndexedDB where the browser has it (localStorage otherwise); see storage.js.
+let storageWarned = false;
+const storage = createStorage({
+  indexedDB: window.indexedDB, ls: lsAdapter, listKey: LIST_KEY, logoKey: LOGO_KEY,
+  onError() {
+    if (storageWarned) return;
+    storageWarned = true;
+    alert('Couldn’t save to this browser’s storage, so your latest changes may be lost. Press Export backup now.');
+  },
+});
+
 let folderSync = null; // set up at the bottom when the browser can save to a folder
-function store(key, value) {
-  try { localStorage.setItem(key, value); } catch { return false; }
-  if (folderSync && key === folderSync.listKey) folderSync.mirror(safeParse(value, {}));
-  return true;
+// `keepStamps`: the documents come from a backup or folder with edit times of their own, so don't restamp them.
+function store(key, value, keepStamps) {
+  if (key === LIST_KEY) {
+    const saved = storage.setList(value, keepStamps);
+    if (!saved.ok) return false;
+    if (folderSync) folderSync.mirror(safeParse(saved.json, {}));
+    return true;
+  }
+  if (key === LOGO_KEY) return storage.setLogo(value);
+  return lsAdapter.set(key, value);
 }
 
-// Reading throws too when the browser blocks storage (some private windows, blocked site data).
 function load(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
+  if (key === LIST_KEY) return storage.getList();
+  if (key === LOGO_KEY) return storage.getLogo();
+  return lsAdapter.get(key);
 }
 
 function save() {
@@ -512,7 +539,6 @@ document.getElementById('convertBtn').addEventListener('click', () => {
 dueDateInput.addEventListener('input', () => { if (!isQuote()) termsSelect.value = 'custom'; });
 
 // --- Saved invoices (named history, separate from the always-on draft) ---
-const LIST_KEY = 'invoice-list';
 const invoiceListEl = document.getElementById('invoiceList');
 const deleteInvoiceBtn = document.getElementById('deleteInvoiceBtn');
 const ledger = document.getElementById('ledger');
@@ -859,7 +885,7 @@ importInput.addEventListener('change', async () => {
   const count = Object.keys(backup.invoices).length;
   const invoices = `${count} invoice${count === 1 ? '' : 's'}`;
   if (!confirm(`Import ${invoices} from this backup? Saved invoices with the same numbers will be replaced.`)) return;
-  if (!store(LIST_KEY, JSON.stringify({ ...getSavedList(), ...backup.invoices }))) { alert('Couldn’t import — this browser’s storage is full. Delete some saved invoices and try again.'); return; }
+  if (!store(LIST_KEY, JSON.stringify({ ...getSavedList(), ...backup.invoices }), true)) { alert('Couldn’t import — this browser’s storage is full. Delete some saved invoices and try again.'); return; }
   if (backup.logo && !load(LOGO_KEY)) setLogo(backup.logo);
   recalc(); // imported credit notes may be against the open invoice
   refreshInvoiceList();
@@ -967,15 +993,17 @@ payDate.value = localISODate(new Date());
 document.getElementById('sheet').addEventListener('input', () => { recalc(); save(); });
 
 // --- Logo upload ---
-const LOGO_KEY = 'invoice-logo';
 const logoDrop = document.getElementById('logoDrop');
 const logoInput = document.getElementById('logoInput');
 const logoPreview = document.getElementById('logoPreview');
 const logoRemove = document.getElementById('logoRemove');
 
 function setLogo(dataUrl) {
-  if (!dataUrl) { try { localStorage.removeItem(LOGO_KEY); } catch {} }
-  else if (!store(LOGO_KEY, dataUrl)) { alert('Couldn’t add the logo — not enough browser storage. Try a smaller image (under 200 KB works best).'); return; }
+  if (!store(LOGO_KEY, dataUrl || null)) { alert('Couldn’t add the logo — not enough browser storage. Try a smaller image (under 200 KB works best).'); return; }
+  showLogo(dataUrl);
+}
+
+function showLogo(dataUrl) {
   logoPreview.src = dataUrl || '';
   logoPreview.hidden = logoRemove.hidden = !dataUrl;
   logoDrop.classList.toggle('has-logo', !!dataUrl);
@@ -1012,15 +1040,11 @@ if (!draft) {
   addItem();
   applyDueDate();
 }
-const savedLogo = load(LOGO_KEY);
-if (savedLogo) setLogo(savedLogo);
 // Phones: ledger starts folded so the invoice is the first thing on screen.
 const narrowScreen = matchMedia('(max-width: 900px)');
 if (narrowScreen.matches) ledger.open = false;
-refreshInvoiceList();
-recalc();
 
-// --- Save to a folder (Chromium desktop). localStorage stays the working copy; every change is also written
+// --- Save to a folder (Chromium desktop). The saved list stays the working copy; every change is also written
 // to <folder>/<client>/<number>.json. Connecting merges the folder's documents into this browser's list.
 const folderBtn = document.getElementById('folderBtn');
 const folderStatus = document.getElementById('folderStatus');
@@ -1041,28 +1065,29 @@ function renderFolderState(state, { name, message }) {
 // number differs on both sides. Storing the merged list also writes this browser's documents out to the folder.
 function mergeFromFolder(docs, ask) {
   const local = getSavedList();
-  let m = mergeLists(local, docs, false);
+  // The newer copy of a document wins. Only when neither is newer (same time, or saved before times were recorded)
+  // does the user choose.
+  let m = mergeLists(local, docs, 'local');
   if (ask && m.conflicts.length) {
     const shown = m.conflicts.slice(0, 5).join(', ') + (m.conflicts.length > 5 ? '…' : '');
-    if (confirm(`${m.conflicts.length} document${m.conflicts.length === 1 ? ' is' : 's are'} saved both here and in the folder with different contents (${shown}).\n\nOK: use the folder’s copies.\nCancel: keep this browser’s copies and overwrite the folder’s.`)) {
-      m = mergeLists(local, docs, true);
+    if (confirm(`${m.conflicts.length} document${m.conflicts.length === 1 ? ' is' : 's are'} saved both here and in the folder with different contents, and there’s no way to tell which is newer (${shown}).\n\nOK: use the folder’s copies.\nCancel: keep this browser’s copies and overwrite the folder’s.`)) {
+      m = mergeLists(local, docs, 'folder');
     }
   }
-  if (!store(LIST_KEY, JSON.stringify(m.merged))) { alert('Couldn’t merge the folder’s documents — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
+  if (!store(LIST_KEY, JSON.stringify(m.merged), true)) { alert('Couldn’t merge the folder’s documents — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
   recalc();
   refreshInvoiceList();
-  const n = m.imported.length + m.conflicts.filter(c => m.merged[c] !== local[c]).length;
+  const n = m.imported.length + m.replaced.length;
   if (n) folderStatus.textContent += ` Loaded ${n} document${n === 1 ? '' : 's'} from it.`;
 }
 
-if (typeof createFolderSync === 'function' && window.showDirectoryPicker && window.indexedDB) {
+if (typeof createFolderSync === 'function' && window.showDirectoryPicker) {
   folderSync = createFolderSync({
     pick: () => window.showDirectoryPicker({ id: 'invoices', mode: 'readwrite' }),
     kv: idbKv(),
     onState: renderFolderState,
   });
   folderBtn.hidden = false;
-  folderSync.resume().then(docs => { if (docs) mergeFromFolder(docs, false); }).catch(() => {});
   folderBtn.addEventListener('click', async () => {
     if (folderSync.state === 'ready') {
       if (confirm(`Stop saving to the folder “${folderSync.name}”? Files already in it stay there.`)) await folderSync.disconnect();
@@ -1096,6 +1121,23 @@ installBtn.addEventListener('click', async () => {
   installBtn.hidden = true;
   try { await e.prompt(); } catch { /* already used or blocked */ }
 });
+
+// --- Start. In IndexedDB mode the saved list is read from the database first; until then the page is inert, so an
+// early click can't save over documents that haven't loaded. localStorage mode has nothing to wait for.
+const appEl = document.querySelector('.app');
+function start() {
+  const logo = load(LOGO_KEY);
+  if (logo) showLogo(logo);
+  refreshInvoiceList();
+  recalc();
+  appEl.inert = false;
+  if (folderSync) folderSync.resume().then(docs => { if (docs) mergeFromFolder(docs, false); }).catch(() => {});
+}
+if (storage.mode === 'localstorage') start();
+else {
+  appEl.inert = true;
+  storage.load().then(start, start); // load() falls back to localStorage itself; this is only a safety net
+}
 
 // Offline + installable. Service workers need http(s), so opening index.html as a file skips this.
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js');

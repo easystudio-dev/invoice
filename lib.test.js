@@ -643,7 +643,7 @@ test('paymentLink: a hostile value cannot change the scheme or host', () => {
   assert.strictEqual(link('https://x.co/{number}', { number: '../..//evil.com' }), 'https://x.co/..%2F..%2F%2Fevil.com');
 });
 
-const { cleanFileName, safeFolderName, folderPlan, diffPlan, parseFolderDoc, mergeLists } = require('./lib.js');
+const { cleanFileName, safeFolderName, folderPlan, diffPlan, parseFolderDoc, mergeLists, stampChanges } = require('./lib.js');
 
 test('safeFolderName: strips what Windows forbids and falls back to "No client"', () => {
   assert.strictEqual(safeFolderName('Acme / Sons: "Ltd"?'), 'Acme Sons Ltd');
@@ -689,16 +689,45 @@ test('parseFolderDoc: reads documents, rejects anything else', () => {
   assert.strictEqual(parseFolderDoc('{}', ''), null);
 });
 
-test('mergeLists: keeps both sides, flags differing copies, folder wins only when asked', () => {
-  const local = { A: { n: 1 }, B: { n: 2 } };
-  const folder = { B: { n: 2 }, C: { n: 3 }, A: { n: 9 } };
-  let m = mergeLists(local, folder, false);
-  assert.deepStrictEqual(m.merged, { A: { n: 1 }, B: { n: 2 }, C: { n: 3 } });
-  assert.deepStrictEqual([m.imported, m.conflicts], [['C'], ['A']]);
-  m = mergeLists(local, folder, true);
-  assert.deepStrictEqual(m.merged.A, { n: 9 });
-  assert.deepStrictEqual(local.A, { n: 1 }); // input not changed
-  assert.deepStrictEqual(mergeLists({}, { toString: { n: 1 } }, false).imported, ['toString']);
+test('mergeLists: newer copy wins; a tie is a conflict and `ties` decides', () => {
+  const local = { A: { n: 1, updatedAt: 100 }, B: { n: 2 }, D: { n: 4, updatedAt: 300 }, E: { n: 5, updatedAt: 50 }, F: { n: 6 } };
+  const folder = { B: { n: 2 }, C: { n: 3 }, A: { n: 9, updatedAt: 200 }, D: { n: 8, updatedAt: 250 }, E: { n: 7, updatedAt: 50 }, F: { n: 60 } };
+  let m = mergeLists(local, folder, 'local');
+  assert.deepStrictEqual(m.merged, { A: { n: 9, updatedAt: 200 }, B: { n: 2 }, C: { n: 3 }, D: { n: 4, updatedAt: 300 }, E: { n: 5, updatedAt: 50 }, F: { n: 6 } });
+  assert.deepStrictEqual([m.imported, m.replaced, m.conflicts], [['C'], ['A'], ['E', 'F']]);
+  m = mergeLists(local, folder, 'folder');
+  assert.deepStrictEqual([m.merged.E, m.merged.F, m.merged.D], [{ n: 7, updatedAt: 50 }, { n: 60 }, { n: 4, updatedAt: 300 }]);
+  assert.deepStrictEqual(m.replaced, ['A', 'E', 'F']);
+  assert.deepStrictEqual(local.A, { n: 1, updatedAt: 100 }); // input not changed
+  assert.deepStrictEqual(mergeLists({}, { toString: { n: 1 } }, 'local').imported, ['toString']);
+  assert.deepStrictEqual(mergeLists({}, JSON.parse('{"__proto__":{"n":1}}'), 'local').imported, []);
+});
+
+test('stampChanges: stamps new and changed documents, keeps the stamp of unchanged ones', () => {
+  const prev = { A: { n: 1, updatedAt: 100 }, B: { n: 2, updatedAt: 100 }, C: { n: 3 } };
+  const next = { A: { n: 1 }, B: { n: 22, updatedAt: 100 }, C: { n: 3 }, D: { n: 4, updatedAt: 5 } };
+  assert.deepStrictEqual(stampChanges(prev, next, 500, false), {
+    A: { n: 1, updatedAt: 100 },      // same content, stamp kept even though the caller dropped it
+    B: { n: 22, updatedAt: 500 },     // changed
+    C: { n: 3 },                      // same content and never stamped: left alone
+    D: { n: 4, updatedAt: 500 },      // new: any stamp it came with is replaced
+  });
+  assert.deepStrictEqual(prev.B, { n: 2, updatedAt: 100 }); // input not changed
+});
+
+test('stampChanges: a second edit in the same millisecond still orders after the first', () => {
+  const first = stampChanges({}, { A: { n: 1 } }, 700, false);
+  const second = stampChanges(first, { A: { n: 2 } }, 700, false);
+  assert.strictEqual(second.A.updatedAt, 701);
+  assert.strictEqual(stampChanges(first, { A: { n: 2 } }, 100, false).A.updatedAt, 701); // clock went back
+});
+
+test('stampChanges: keep leaves every stamp as given; unsafe keys and non-documents are handled', () => {
+  const next = { A: { n: 1 }, B: { n: 2, updatedAt: 7 }, C: 'junk', D: null };
+  assert.deepStrictEqual(stampChanges({}, next, 500, true), next);
+  const out = stampChanges({}, JSON.parse('{"__proto__":{"n":1},"A":[1],"B":{"n":2}}'), 9, false);
+  assert.deepStrictEqual(Object.keys(out), ['A', 'B']);
+  assert.deepStrictEqual(out, { A: [1], B: { n: 2, updatedAt: 9 } });
 });
 
 const { hasVatNumber, taxInvoiceIssues, backupNudge, parseBackup, makeBackup, BACKUP_VERSION } = require('./lib.js');
