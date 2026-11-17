@@ -427,4 +427,72 @@ function mergeLists(local, folder, preferFolder) {
   return { merged, imported, conflicts };
 }
 
-if (typeof module === 'object') module.exports = { cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };
+// --- SARS tax-invoice advisory ---
+// Advice shown beside a document that charges VAT; it never blocks saving. A full tax invoice (VAT Act s20) needs
+// the supplier's name, address and VAT number, the recipient's name and address, a description of each line, and
+// (from R5,000) the recipient's address and, if they are a VAT vendor, their VAT number.
+const FULL_TAX_INVOICE_FROM = 5000;
+
+// A South African VAT number: 10 digits starting with 4, possibly written with spaces or dashes.
+function hasVatNumber(text) {
+  return /(?<!\d)4\d{9}(?!\d)/.test(String(text || '').replace(/(\d)[ -](?=\d)/g, '$1'));
+}
+
+// doc: the document as collected from the form; total: its grand total including VAT.
+// Returns a list of plain-language things to fix; [] when nothing is missing or the document isn't a VAT one.
+function taxInvoiceIssues(doc, total) {
+  if (!doc || !doc.vatToggle || doc.docType === 'quote') return [];
+  const text = k => (typeof doc[k] === 'string' ? doc[k].trim() : '');
+  const issues = [];
+  if (!text('fromName')) issues.push('Add your business name under From.');
+  if (!hasVatNumber(doc.fromDetails)) issues.push('Add your 10-digit VAT number to your details under From. A tax invoice must show it.');
+  if (!text('toName')) issues.push('Add the client’s name under Bill to.');
+  if ((doc.currency || 'ZAR') === 'ZAR' && total >= FULL_TAX_INVOICE_FROM && !text('toDetails')) {
+    issues.push('This is R5,000 or more: add the client’s address, and their VAT number if they are VAT-registered.');
+  }
+  const items = Array.isArray(doc.items) ? doc.items : [];
+  if (items.some(it => it && !String(it.desc || '').trim() && (parseFloat(it.qty) || 0) * (parseFloat(it.price) || 0) !== 0)) {
+    issues.push('Every line needs a description.');
+  }
+  return issues;
+}
+
+// --- Backups ---
+const BACKUP_VERSION = 1;
+const BACKUP_AFTER_DAYS = 30;
+
+// A reminder to export a backup, or '' when none is due. `count` = saved documents, `lastBackup` and `today` are
+// ISO dates ('' / null = never backed up), `covered` = the documents are already being copied to a folder.
+// Never backed up: remind from the second document on. Backed up: remind once the last one is 30 days old.
+function backupNudge({ count, lastBackup, today, covered }) {
+  if (covered || !(count > 0)) return '';
+  const docs = `${count} saved document${count === 1 ? '' : 's'}`;
+  if (!lastBackup) return count >= 2 ? `You have ${docs} and no backup yet. Press Export backup so a cleared browser can’t take them.` : '';
+  const days = Math.floor((Date.parse(today) - Date.parse(lastBackup)) / 86400000);
+  return days >= BACKUP_AFTER_DAYS ? `Your last backup was ${days} days ago. Press Export backup to save your ${docs}.` : '';
+}
+
+// The object written to a backup file. `now` is a Date.
+function makeBackup(invoices, logo, now) {
+  return { app: 'invoice', version: BACKUP_VERSION, exported: now.toISOString(), invoices, logo };
+}
+
+// Reads backup file text: { invoices, logo } on success, { error } when it can't be used. Files from before
+// backups carried a version count as version 1. Entries that aren't plain objects are dropped.
+function parseBackup(text) {
+  const data = safeParse(text, null);
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !data.invoices || typeof data.invoices !== 'object' || Array.isArray(data.invoices)) {
+    return { error: 'notBackup' };
+  }
+  if (data.version !== undefined && !(Number.isInteger(data.version) && data.version >= 1)) return { error: 'notBackup' };
+  if (data.version > BACKUP_VERSION) return { error: 'newer' };
+  const invoices = {};
+  Object.keys(data.invoices).forEach(num => {
+    const doc = data.invoices[num];
+    if (['__proto__', 'constructor', 'prototype'].includes(num)) return;
+    if (doc && typeof doc === 'object' && !Array.isArray(doc)) invoices[num] = doc;
+  });
+  return { invoices, logo: typeof data.logo === 'string' ? data.logo : null };
+}
+
+if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

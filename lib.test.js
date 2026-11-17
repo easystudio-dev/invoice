@@ -700,3 +700,65 @@ test('mergeLists: keeps both sides, flags differing copies, folder wins only whe
   assert.deepStrictEqual(local.A, { n: 1 }); // input not changed
   assert.deepStrictEqual(mergeLists({}, { toString: { n: 1 } }, false).imported, ['toString']);
 });
+
+const { hasVatNumber, taxInvoiceIssues, backupNudge, parseBackup, makeBackup, BACKUP_VERSION } = require('./lib.js');
+
+test('hasVatNumber: 10 digits starting with 4, spaces and dashes allowed, not inside longer numbers', () => {
+  assert.strictEqual(hasVatNumber('VAT No. 4123456789'), true);
+  assert.strictEqual(hasVatNumber('VAT 412 345 6789'), true);
+  assert.strictEqual(hasVatNumber('vat: 412-345-6789\n12 Main Rd'), true);
+  assert.strictEqual(hasVatNumber('Tel +27 41 123 4567'), false);
+  assert.strictEqual(hasVatNumber('41234567890'), false);
+  assert.strictEqual(hasVatNumber('123456789'), false);
+  assert.strictEqual(hasVatNumber(''), false);
+  assert.strictEqual(hasVatNumber(undefined), false);
+});
+
+test('taxInvoiceIssues: nothing for quotes or documents without VAT', () => {
+  const bare = { fromName: '', fromDetails: '', toName: '', toDetails: '', items: [{ desc: '', qty: '1', price: '10' }] };
+  assert.deepStrictEqual(taxInvoiceIssues({ ...bare, vatToggle: false }, 10), []);
+  assert.deepStrictEqual(taxInvoiceIssues({ ...bare, vatToggle: true, docType: 'quote' }, 10), []);
+  assert.deepStrictEqual(taxInvoiceIssues(null, 0), []);
+});
+
+test('taxInvoiceIssues: lists what a SARS tax invoice still needs', () => {
+  const doc = { vatToggle: true, docType: 'invoice', currency: 'ZAR', fromName: 'Me', fromDetails: '1 Road', toName: 'Acme', toDetails: '',
+    items: [{ desc: 'Work', qty: '1', price: '100' }] };
+  assert.strictEqual(taxInvoiceIssues(doc, 100).length, 1);
+  assert.match(taxInvoiceIssues(doc, 100)[0], /VAT number/);
+  const ok = { ...doc, fromDetails: '1 Road\nVAT 4123456789' };
+  assert.deepStrictEqual(taxInvoiceIssues(ok, 4999.99), []);
+  assert.match(taxInvoiceIssues(ok, 5000)[0], /R5,000 or more/);
+  assert.deepStrictEqual(taxInvoiceIssues({ ...ok, toDetails: 'Acme, 2 Street' }, 5000), []);
+  assert.deepStrictEqual(taxInvoiceIssues({ ...ok, currency: 'USD' }, 90000), []); // the R5,000 rule is rand-only
+  assert.deepStrictEqual(taxInvoiceIssues({ ...ok, fromName: ' ', toName: '' }, 1).length, 2);
+  assert.match(taxInvoiceIssues({ ...ok, items: [{ desc: ' ', qty: '2', price: '5' }, { desc: '', qty: '', price: '' }] }, 1)[0], /description/);
+  assert.deepStrictEqual(taxInvoiceIssues({ ...ok, docType: 'credit' }, 1), []);
+});
+
+test('backupNudge: reminds only when a backup is missing or old, and not when a folder holds the copies', () => {
+  const base = { today: '2026-11-17', covered: false };
+  assert.strictEqual(backupNudge({ ...base, count: 0, lastBackup: '' }), '');
+  assert.strictEqual(backupNudge({ ...base, count: 1, lastBackup: '' }), '');
+  assert.match(backupNudge({ ...base, count: 2, lastBackup: null }), /2 saved documents and no backup yet/);
+  assert.strictEqual(backupNudge({ ...base, count: 5, lastBackup: '2026-11-01' }), '');
+  assert.strictEqual(backupNudge({ ...base, count: 5, lastBackup: '2026-10-19' }), ''); // 29 days
+  assert.match(backupNudge({ ...base, count: 1, lastBackup: '2026-10-18' }), /30 days ago.*1 saved document\./);
+  assert.strictEqual(backupNudge({ ...base, count: 9, lastBackup: '', covered: true }), '');
+});
+
+test('parseBackup: accepts old and current files, rejects newer or malformed ones, drops junk entries', () => {
+  const doc = { invNumber: 'A' };
+  assert.deepStrictEqual(parseBackup(JSON.stringify({ invoices: { A: doc }, logo: 'data:x' })), { invoices: { A: doc }, logo: 'data:x' });
+  assert.deepStrictEqual(parseBackup(JSON.stringify({ version: 1, invoices: { A: doc, B: null, C: [1], D: 'x' } })), { invoices: { A: doc }, logo: null });
+  assert.deepStrictEqual(parseBackup('{"version":1,"invoices":{"__proto__":{"x":1},"constructor":{}}}'), { invoices: {}, logo: null });
+  assert.deepStrictEqual(parseBackup(JSON.stringify({ version: BACKUP_VERSION + 1, invoices: {} })), { error: 'newer' });
+  for (const bad of ['nope', '[]', '{}', '{"invoices":[]}', '{"invoices":"x"}', '{"version":"1","invoices":{}}', '{"version":0,"invoices":{}}', 'null'])
+    assert.deepStrictEqual(parseBackup(bad), { error: 'notBackup' }, bad);
+});
+
+test('makeBackup round-trips through parseBackup', () => {
+  const b = makeBackup({ A: { invNumber: 'A' } }, null, new Date('2026-11-17T10:00:00Z'));
+  assert.deepStrictEqual([b.app, b.version, b.exported], ['invoice', BACKUP_VERSION, '2026-11-17T10:00:00.000Z']);
+  assert.deepStrictEqual(parseBackup(JSON.stringify(b)).invoices, { A: { invNumber: 'A' } });
+});

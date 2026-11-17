@@ -632,3 +632,8 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   textarea { resize: none; }
   input::-webkit-calendar-picker-indicator { display: none; }
 }
+
+/* Advice, not errors: what a SARS tax invoice still needs. Screen only. */
+.tax-issues { list-style: none; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-strong); border-left: 3px solid var(--overdue); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--ink); }
+.tax-issues li + li { margin-top: 4px; }
+.footnote.nudge { color: var(--ink); max-width: 34ch; padding-left: 8px; border-left: 3px solid var(--overdue); }

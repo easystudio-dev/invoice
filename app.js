@@ -178,6 +178,15 @@ function recalc() {
   document.getElementById('creditRef').textContent = creditFor ? `Credit note for invoice ${creditFor}` : '';
   document.getElementById('newInvoiceBtn').textContent = `New ${docName()}`;
   updateStamp(t.total, credited);
+  showTaxIssues(t.total);
+}
+
+// Advice for a document that charges VAT: what a SARS tax invoice still needs. Doesn't block anything.
+function showTaxIssues(total) {
+  const list = document.getElementById('taxIssues');
+  const issues = taxInvoiceIssues(collectData(), total);
+  list.replaceChildren(...issues.map(text => Object.assign(document.createElement('li'), { textContent: text })));
+  list.hidden = !issues.length;
 }
 
 // --- Payment details: the EFT block and the online payment link (both print; the inputs don't) ---
@@ -620,6 +629,7 @@ function refreshInvoiceList() {
   const numbers = Object.keys(list).sort().reverse();
   const shown = numbers.filter(num => ledgerMatches(list, num, today, ledgerSearch.value, ledgerFilterEl.value));
   document.getElementById('invoiceCount').textContent = numbers.length || '';
+  updateBackupNudge();
   refreshClients(list, numbers);
   document.getElementById('ledgerEmpty').hidden = numbers.length > 0;
   document.getElementById('ledgerNoMatch').hidden = !numbers.length || shown.length > 0;
@@ -734,6 +744,7 @@ document.getElementById('saveInvoiceBtn').addEventListener('click', () => {
   list[num] = data;
   if (!store(LIST_KEY, JSON.stringify(list))) { alert('Couldn’t save — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
   setOpenInvoice(num);
+  requestPersistence();
   recalc(); // credit notes may already point at this number
   refreshInvoiceList();
   showDone(document.getElementById('saveInvoiceBtn'), 'Saved', `${capitalise(docName())} ${num} saved`);
@@ -789,13 +800,34 @@ deleteInvoiceBtn.addEventListener('click', () => {
 });
 
 // --- Backup (localStorage is wiped with browser data, so let people keep a file) ---
+// Ask the browser not to clear our storage when it is short of space. Chromium decides quietly (installed apps
+// are usually allowed), Firefox asks the user. Harmless to repeat; does nothing where it isn't supported.
+async function requestPersistence() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist || await navigator.storage.persisted()) return;
+    await navigator.storage.persist();
+  } catch { /* not available here */ }
+}
+
+// Reminds the user to export a backup when it has been a while (or never). A connected folder counts as a backup.
+const LAST_BACKUP_KEY = 'invoice-last-backup';
+function updateBackupNudge() {
+  const el = document.getElementById('backupNudge');
+  const text = backupNudge({ count: Object.keys(getSavedList()).length, lastBackup: load(LAST_BACKUP_KEY),
+    today: localISODate(new Date()), covered: !!folderSync && folderSync.state === 'ready' });
+  el.textContent = text;
+  el.hidden = !text;
+}
+
 document.getElementById('exportBtn').addEventListener('click', () => {
-  const backup = { invoices: getSavedList(), logo: load(LOGO_KEY) };
+  const backup = makeBackup(getSavedList(), load(LOGO_KEY), new Date());
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
   a.download = `invoices-backup-${localISODate(new Date())}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  store(LAST_BACKUP_KEY, localISODate(new Date()));
+  updateBackupNudge();
 });
 
 // Zoho Books invoice import: exactly the invoices the ledger lists right now (search + status filter).
@@ -821,8 +853,9 @@ importInput.addEventListener('change', async () => {
   const file = importInput.files[0];
   importInput.value = '';
   if (!file) return;
-  const backup = safeParse(await file.text(), null);
-  if (!backup || !backup.invoices || typeof backup.invoices !== 'object') { alert('That file isn’t an invoice backup. Choose a .json file made with Export backup.'); return; }
+  const backup = parseBackup(await file.text());
+  if (backup.error === 'newer') { alert('That backup was made by a newer version of this app. Reload this page to update, then try again.'); return; }
+  if (backup.error) { alert('That file isn’t an invoice backup. Choose a .json file made with Export backup.'); return; }
   const count = Object.keys(backup.invoices).length;
   const invoices = `${count} invoice${count === 1 ? '' : 's'}`;
   if (!confirm(`Import ${invoices} from this backup? Saved invoices with the same numbers will be replaced.`)) return;
@@ -993,6 +1026,7 @@ const folderBtn = document.getElementById('folderBtn');
 const folderStatus = document.getElementById('folderStatus');
 
 function renderFolderState(state, { name, message }) {
+  updateBackupNudge();
   folderBtn.textContent = state === 'ready' ? 'Folder connected' : state === 'off' ? 'Save to folder…' : 'Reconnect folder';
   folderBtn.title = state === 'ready' ? `Saving to “${name}”. Press to stop.` : 'Also save every invoice as a file in a folder you choose';
   folderStatus.textContent = {

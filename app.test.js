@@ -1188,3 +1188,92 @@ test('no fonts are requested from Google', () => {
   const fs = require('fs');
   for (const f of ['index.html', 'style.css', 'sw.js']) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /fonts\.(googleapis|gstatic)\.com/);
 });
+
+// --- Tax invoice advice, backups, persistence ---
+test('VAT on: advice lists what a tax invoice lacks and clears as it is filled in; quotes get none', () => {
+  const { $, type } = boot();
+  assert.strictEqual($('#taxIssues').hidden, true);
+  type('#vatToggle', true);
+  assert.strictEqual($('#taxIssues').hidden, false);
+  assert.match($('#taxIssues').textContent, /VAT number/);
+  type('#fromName', 'Me');
+  type('#fromDetails', '1 Road\nVAT 4123456789');
+  type('#toName', 'Acme');
+  type($('#itemsBody tr .item-desc'), 'Work');
+  assert.strictEqual($('#taxIssues').hidden, true);
+  type('#fromDetails', '1 Road');
+  assert.strictEqual($('#taxIssues').hidden, false);
+  type('#docType', 'quote');
+  assert.strictEqual($('#taxIssues').hidden, true);
+});
+
+test('backup reminder: appears with 2+ unbacked-up documents, goes after Export backup', () => {
+  const seed = { 'invoice-list': { 'INV-0001': inv('INV-0001'), 'INV-0002': inv('INV-0002') } };
+  const { $, w } = boot({ seed });
+  assert.strictEqual($('#backupNudge').hidden, false);
+  assert.match($('#backupNudge').textContent, /2 saved documents and no backup yet/);
+  w.URL.createObjectURL = () => 'blob:x';
+  w.URL.revokeObjectURL = () => {};
+  w.HTMLAnchorElement.prototype.click = () => {};
+  $('#exportBtn').click();
+  assert.strictEqual($('#backupNudge').hidden, true);
+  assert.strictEqual(w.localStorage.getItem('invoice-last-backup'), localISODate(new Date()));
+});
+
+test('backup reminder: shows once the last backup is a month old', () => {
+  const old = localISODate(new Date(Date.now() - 40 * 86400000));
+  const { $ } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') }, 'invoice-last-backup': old } });
+  assert.match($('#backupNudge').textContent, /40 days ago/);
+});
+
+test('Export backup writes a versioned file that Import backup reads back', async () => {
+  const { $, w, saved } = boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } });
+  let blob;
+  w.URL.createObjectURL = b => { blob = b; return 'blob:x'; };
+  w.URL.revokeObjectURL = () => {};
+  w.HTMLAnchorElement.prototype.click = () => {};
+  $('#exportBtn').click();
+  const text = await new Promise(r => { const fr = new w.FileReader(); fr.onload = () => r(fr.result); fr.readAsText(blob); });
+  const file = JSON.parse(text);
+  assert.strictEqual(file.version, 1);
+  assert.deepStrictEqual(Object.keys(file.invoices), ['INV-0001']);
+
+  const b = boot();
+  const input = b.$('#importInput');
+  Object.defineProperty(input, 'files', { value: [{ text: async () => text }] });
+  input.dispatchEvent(new b.w.Event('change'));
+  await tick(20);
+  assert.deepStrictEqual(Object.keys(b.saved()), ['INV-0001']);
+});
+
+test('Import backup refuses a file from a newer version and one that is not a backup', async () => {
+  for (const [text, expected] of [['{"version":99,"invoices":{}}', /newer version/], ['{"foo":1}', /isn’t an invoice backup/]]) {
+    const b = boot();
+    const input = b.$('#importInput');
+    Object.defineProperty(input, 'files', { value: [{ text: async () => text }] });
+    input.dispatchEvent(new b.w.Event('change'));
+    await tick(20);
+    assert.match(b.w.alerts.at(-1), expected);
+    assert.deepStrictEqual(b.saved(), {});
+  }
+});
+
+test('Save asks the browser to keep storage, once, and only if it is not already persistent', async () => {
+  for (const [persisted, calls] of [[false, 1], [true, 0]]) {
+    const { $, w, type } = boot();
+    let persist = 0;
+    Object.defineProperty(w.navigator, 'storage', { value: { persisted: async () => persisted, persist: async () => { persist++; return true; } } });
+    type('#fromName', 'Me');
+    $('#saveInvoiceBtn').click();
+    await tick(10);
+    assert.strictEqual(persist, calls);
+  }
+});
+
+test('Save still works where the storage API is missing or throws', async () => {
+  const { $, w, saved } = boot();
+  Object.defineProperty(w.navigator, 'storage', { value: { persisted: async () => { throw new Error('no'); }, persist: async () => {} } });
+  $('#saveInvoiceBtn').click();
+  await tick(10);
+  assert.strictEqual(Object.keys(saved()).length, 1);
+});

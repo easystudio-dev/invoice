@@ -10,7 +10,7 @@ Make invoices, quotes and credit notes in the browser. Built for South African f
 - Export a CSV for Zoho Books' invoice import, and back up or restore everything as JSON
 - Optional: save every document as a file in a folder you choose (Chrome, Edge, Opera on desktop), one subfolder per client, e.g. `Invoices/Acme Ltd/INV-0001.json`. Put the folder inside Dropbox, Google Drive or OneDrive to sync it between computers
 
-Clearing your browser data deletes saved invoices, so use **Export backup** now and then.
+Clearing your browser data deletes saved invoices. The app asks the browser to keep its storage and reminds you to **Export backup** (or connect a folder) when a backup is due.
 
 ## Run
 
@@ -24,5 +24,9 @@ npm test
 ```
 
 The app itself has no dependencies. jsdom is only used by the tests. `vendor/qrcode.js` is [qrcode-generator](https://www.npmjs.com/package/qrcode-generator) 1.4.4 (MIT).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The fonts in `fonts/` are under the SIL Open Font License (texts alongside); `vendor/qrcode.js` is MIT.
 
 Made by [EasyStudio](https://www.easystudio.co.za).
