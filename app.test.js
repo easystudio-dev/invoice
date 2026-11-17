@@ -1091,3 +1091,56 @@ test('opening an old save without payment details keeps the current bank details
   assert.strictEqual($('#bankName').value, 'FNB');
   assert.strictEqual($('#bankAccount').value, '62123456789');
 });
+
+// --- Save to folder ---
+const { fakeDir } = require('./test-helpers.js');
+const tick = ms => new Promise(r => setTimeout(r, ms));
+
+test('folder button stays hidden when the browser has no folder picker', () => {
+  const { $ } = boot();
+  assert.strictEqual($('#folderBtn').hidden, true);
+});
+
+test('connecting a folder loads its documents, writes ours, and then follows every save and delete', async () => {
+  const dir = fakeDir('Invoices');
+  dir.put('Acme/INV-0100.json', JSON.stringify(inv('INV-0100', { toName: 'Acme' })));
+  const { $, d, saved } = boot({ folder: dir, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003', { toName: 'Beta' }) } } });
+  assert.strictEqual($('#folderBtn').hidden, false);
+  $('#folderBtn').click();
+  await tick(400);
+  assert.deepStrictEqual(Object.keys(saved()).sort(), ['INV-0003', 'INV-0100']);
+  assert.deepStrictEqual(Object.keys(dir.files()).sort(), ['Acme/INV-0100.json', 'Beta/INV-0003.json']);
+  assert.match($('#folderStatus').textContent, /Saving to the folder “Invoices”/);
+  assert.match($('#folderStatus').textContent, /Loaded 1 document/);
+  assert.strictEqual($('#folderBtn').textContent, 'Folder connected');
+
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0003')).click();
+  $('#deleteInvoiceBtn').click();
+  await tick(400);
+  assert.deepStrictEqual(Object.keys(dir.files()), ['Acme/INV-0100.json']);
+  assert.deepStrictEqual(dir.folders(), ['Acme']);
+});
+
+test('pressing the folder button while connected can stop saving to it', async () => {
+  const dir = fakeDir();
+  const { $, d } = boot({ folder: dir });
+  $('#folderBtn').click();
+  await tick(50);
+  assert.strictEqual($('#folderBtn').textContent, 'Folder connected');
+  $('#folderBtn').click();
+  await tick(50);
+  assert.strictEqual($('#folderBtn').textContent, 'Save to folder…');
+  assert.strictEqual($('#folderStatus').textContent, '');
+});
+
+test('differing copies: OK takes the folder’s, Cancel keeps this browser’s', async () => {
+  for (const [answer, expected] of [[true, 'Folder'], [false, 'Local']]) {
+    const dir = fakeDir();
+    dir.put('X/INV-0003.json', JSON.stringify(inv('INV-0003', { toName: 'X', notes: 'Folder' })));
+    const { $, saved } = boot({ folder: dir, confirm: answer, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003', { toName: 'X', notes: 'Local' }) } } });
+    $('#folderBtn').click();
+    await tick(400);
+    assert.strictEqual(saved()['INV-0003'].notes, expected);
+    assert.strictEqual(JSON.parse(dir.files()['X/INV-0003.json']).notes, expected);
+  }
+});

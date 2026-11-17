@@ -306,8 +306,11 @@ function applyData(data) {
 }
 
 // localStorage throws when full (e.g. big logo + many saved invoices) — don't let that break the app.
+let folderSync = null; // set up at the bottom when the browser can save to a folder
 function store(key, value) {
-  try { localStorage.setItem(key, value); return true; } catch { return false; }
+  try { localStorage.setItem(key, value); } catch { return false; }
+  if (folderSync && key === folderSync.listKey) folderSync.mirror(safeParse(value, {}));
+  return true;
 }
 
 // Reading throws too when the browser blocks storage (some private windows, blocked site data).
@@ -983,6 +986,62 @@ const narrowScreen = matchMedia('(max-width: 900px)');
 if (narrowScreen.matches) ledger.open = false;
 refreshInvoiceList();
 recalc();
+
+// --- Save to a folder (Chromium desktop). localStorage stays the working copy; every change is also written
+// to <folder>/<client>/<number>.json. Connecting merges the folder's documents into this browser's list.
+const folderBtn = document.getElementById('folderBtn');
+const folderStatus = document.getElementById('folderStatus');
+
+function renderFolderState(state, { name, message }) {
+  folderBtn.textContent = state === 'ready' ? 'Folder connected' : state === 'off' ? 'Save to folder…' : 'Reconnect folder';
+  folderBtn.title = state === 'ready' ? `Saving to “${name}”. Press to stop.` : 'Also save every invoice as a file in a folder you choose';
+  folderStatus.textContent = {
+    off: '',
+    ready: `Saving to the folder “${name}”.`,
+    'needs-permission': `Folder “${name}” needs your permission again. Press Reconnect folder.`,
+    error: `Folder “${name}”: ${message}. Press Reconnect folder.`,
+  }[state];
+}
+
+// Brings the folder's documents into the saved list. `ask`: say so and let the user choose when the same
+// number differs on both sides. Storing the merged list also writes this browser's documents out to the folder.
+function mergeFromFolder(docs, ask) {
+  const local = getSavedList();
+  let m = mergeLists(local, docs, false);
+  if (ask && m.conflicts.length) {
+    const shown = m.conflicts.slice(0, 5).join(', ') + (m.conflicts.length > 5 ? '…' : '');
+    if (confirm(`${m.conflicts.length} document${m.conflicts.length === 1 ? ' is' : 's are'} saved both here and in the folder with different contents (${shown}).\n\nOK: use the folder’s copies.\nCancel: keep this browser’s copies and overwrite the folder’s.`)) {
+      m = mergeLists(local, docs, true);
+    }
+  }
+  if (!store(LIST_KEY, JSON.stringify(m.merged))) { alert('Couldn’t merge the folder’s documents — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
+  recalc();
+  refreshInvoiceList();
+  const n = m.imported.length + m.conflicts.filter(c => m.merged[c] !== local[c]).length;
+  if (n) folderStatus.textContent += ` Loaded ${n} document${n === 1 ? '' : 's'} from it.`;
+}
+
+if (typeof createFolderSync === 'function' && window.showDirectoryPicker && window.indexedDB) {
+  folderSync = createFolderSync({
+    pick: () => window.showDirectoryPicker({ id: 'invoices', mode: 'readwrite' }),
+    kv: idbKv(),
+    onState: renderFolderState,
+  });
+  folderBtn.hidden = false;
+  folderSync.resume().then(docs => { if (docs) mergeFromFolder(docs, false); }).catch(() => {});
+  folderBtn.addEventListener('click', async () => {
+    if (folderSync.state === 'ready') {
+      if (confirm(`Stop saving to the folder “${folderSync.name}”? Files already in it stay there.`)) await folderSync.disconnect();
+      return;
+    }
+    try {
+      const docs = folderSync.name ? await folderSync.reconnect() : await folderSync.choose();
+      if (docs) mergeFromFolder(docs, true);
+    } catch (e) {
+      if (e && e.name !== 'AbortError') alert(`Couldn’t use that folder: ${e.message || e.name}. Choose a different folder, such as a new one called Invoices.`);
+    }
+  });
+}
 
 // Offline + installable. Service workers need http(s), so opening index.html as a file skips this.
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js');

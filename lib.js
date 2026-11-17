@@ -355,4 +355,76 @@ function paymentLink(template, { amount, number, currency } = {}) {
   } catch { return ''; }
 }
 
-if (typeof module === 'object') module.exports = { localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };
+// --- Saving to a folder: one JSON file per document, inside one subfolder per client ---
+
+const NO_CLIENT_FOLDER = 'No client';
+
+// A name that is safe as a file or folder name on Windows, macOS and Linux, or '' when nothing usable is left.
+// Strips the characters Windows forbids and control characters, trailing dots/spaces, leading dots, and
+// reserved device names (CON, NUL, COM1 …); capped at 80 characters.
+function cleanFileName(name) {
+  let s = String(name ?? '').normalize('NFC').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ')
+    .trim().replace(/^\.+/, '').replace(/[. ]+$/, '');
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(s)) s = '_' + s;
+  return s.slice(0, 80).replace(/[. ]+$/, '');
+}
+
+function safeFolderName(name) {
+  return cleanFileName(name) || NO_CLIENT_FOLDER;
+}
+
+// { 'Client/INV-0001.json': text } for every saved document: where each one goes and what the file holds.
+// Two documents that would land on the same path (case-insensitively, as Windows and macOS see it) get " (2)" etc.
+function folderPlan(list) {
+  const plan = {};
+  const taken = new Set();
+  Object.keys(list || {}).sort().forEach(num => {
+    const doc = list[num];
+    if (!doc || typeof doc !== 'object') return;
+    const dir = safeFolderName(doc.toName);
+    const base = cleanFileName(num) || 'document';
+    let name = base;
+    for (let n = 2; taken.has(`${dir}/${name}.json`.toLowerCase()); n++) name = `${base} (${n})`;
+    const path = `${dir}/${name}.json`;
+    taken.add(path.toLowerCase());
+    plan[path] = JSON.stringify(doc, null, 2);
+  });
+  return plan;
+}
+
+// What to do to turn the files we last wrote (`prev`) into `next`: both are { path: text }.
+// Only paths in `prev` are ever removed, so a file the user put there themselves is never touched.
+function diffPlan(prev, next) {
+  const write = Object.keys(next).filter(p => prev[p] !== next[p]);
+  const remove = Object.keys(prev).filter(p => !(p in next));
+  return { write, remove };
+}
+
+// [number, doc] from a document file's text, or null when it isn't a document we could have written.
+// `stem` (the file name without .json) is the number when the file doesn't carry one.
+function parseFolderDoc(text, stem) {
+  const doc = safeParse(text, null);
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  if (doc.items !== undefined && !Array.isArray(doc.items)) return null;
+  const num = (typeof doc.invNumber === 'string' ? doc.invNumber.trim() : '') || String(stem || '').trim();
+  if (!num || ['__proto__', 'constructor', 'prototype'].includes(num)) return null;
+  return [num, doc];
+}
+
+// Combines this browser's saved list with the documents found in a folder. Documents in only one place are
+// kept. When both have a number with different contents it is a conflict: `preferFolder` picks the folder's copy,
+// otherwise this browser's copy stays.
+function mergeLists(local, folder, preferFolder) {
+  const merged = { ...local };
+  const imported = [];
+  const conflicts = [];
+  Object.keys(folder || {}).forEach(num => {
+    if (!Object.prototype.hasOwnProperty.call(local, num)) { merged[num] = folder[num]; imported.push(num); return; }
+    if (JSON.stringify(local[num]) === JSON.stringify(folder[num])) return;
+    conflicts.push(num);
+    if (preferFolder) merged[num] = folder[num];
+  });
+  return { merged, imported, conflicts };
+}
+
+if (typeof module === 'object') module.exports = { cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

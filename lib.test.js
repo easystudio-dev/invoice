@@ -642,3 +642,61 @@ test('paymentLink: a hostile value cannot change the scheme or host', () => {
   assert.strictEqual(link('https://x.co/?r={number}', { number: 'javascript:alert(1)' }), 'https://x.co/?r=javascript%3Aalert(1)');
   assert.strictEqual(link('https://x.co/{number}', { number: '../..//evil.com' }), 'https://x.co/..%2F..%2F%2Fevil.com');
 });
+
+const { cleanFileName, safeFolderName, folderPlan, diffPlan, parseFolderDoc, mergeLists } = require('./lib.js');
+
+test('safeFolderName: strips what Windows forbids and falls back to "No client"', () => {
+  assert.strictEqual(safeFolderName('Acme / Sons: "Ltd"?'), 'Acme Sons Ltd');
+  assert.strictEqual(safeFolderName('  Jane Smith.  '), 'Jane Smith');
+  assert.strictEqual(safeFolderName('..hidden'), 'hidden');
+  assert.strictEqual(safeFolderName('CON'), '_CON');
+  assert.strictEqual(safeFolderName('nul.txt'), '_nul.txt');
+  assert.strictEqual(safeFolderName(''), 'No client');
+  assert.strictEqual(safeFolderName(undefined), 'No client');
+  assert.strictEqual(safeFolderName('///'), 'No client');
+  assert.strictEqual(safeFolderName('x'.repeat(200)).length, 80);
+  assert.strictEqual(cleanFileName('a\u0000b'), 'a b');
+});
+
+test('folderPlan: one file per document in its client folder, collisions get a suffix', () => {
+  const plan = folderPlan({
+    'INV-0001': { invNumber: 'INV-0001', toName: 'Acme' },
+    'INV-0002': { invNumber: 'INV-0002', toName: '' },
+    'INV 1': { toName: 'Acme' },
+    'INV/1': { toName: 'acme' }, // same folder on Windows/macOS, and 'INV 1' once cleaned
+    bad: null,
+  });
+  assert.deepStrictEqual(Object.keys(plan).sort(), ['Acme/INV 1.json', 'Acme/INV-0001.json', 'No client/INV-0002.json', 'acme/INV 1 (2).json'].sort());
+  assert.deepStrictEqual(JSON.parse(plan['Acme/INV-0001.json']), { invNumber: 'INV-0001', toName: 'Acme' });
+  assert.deepStrictEqual(folderPlan(null), {});
+});
+
+test('diffPlan: writes what changed, removes only what we wrote before', () => {
+  const prev = { 'A/1.json': 'x', 'A/2.json': 'y', 'B/3.json': 'z' };
+  const next = { 'A/1.json': 'x', 'A/2.json': 'Y', 'C/4.json': 'w' };
+  assert.deepStrictEqual(diffPlan(prev, next), { write: ['A/2.json', 'C/4.json'], remove: ['B/3.json'] });
+  assert.deepStrictEqual(diffPlan({}, {}), { write: [], remove: [] });
+});
+
+test('parseFolderDoc: reads documents, rejects anything else', () => {
+  assert.deepStrictEqual(parseFolderDoc('{"invNumber":" INV-1 ","items":[]}', 'file'), ['INV-1', { invNumber: ' INV-1 ', items: [] }]);
+  assert.strictEqual(parseFolderDoc('{"toName":"x"}', 'INV-9')[0], 'INV-9');
+  assert.strictEqual(parseFolderDoc('not json', 'a'), null);
+  assert.strictEqual(parseFolderDoc('[1,2]', 'a'), null);
+  assert.strictEqual(parseFolderDoc('"str"', 'a'), null);
+  assert.strictEqual(parseFolderDoc('{"items":"nope"}', 'a'), null);
+  assert.strictEqual(parseFolderDoc('{"invNumber":"__proto__"}', 'a'), null);
+  assert.strictEqual(parseFolderDoc('{}', ''), null);
+});
+
+test('mergeLists: keeps both sides, flags differing copies, folder wins only when asked', () => {
+  const local = { A: { n: 1 }, B: { n: 2 } };
+  const folder = { B: { n: 2 }, C: { n: 3 }, A: { n: 9 } };
+  let m = mergeLists(local, folder, false);
+  assert.deepStrictEqual(m.merged, { A: { n: 1 }, B: { n: 2 }, C: { n: 3 } });
+  assert.deepStrictEqual([m.imported, m.conflicts], [['C'], ['A']]);
+  m = mergeLists(local, folder, true);
+  assert.deepStrictEqual(m.merged.A, { n: 9 });
+  assert.deepStrictEqual(local.A, { n: 1 }); // input not changed
+  assert.deepStrictEqual(mergeLists({}, { toString: { n: 1 } }, false).imported, ['toString']);
+});
