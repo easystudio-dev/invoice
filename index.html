@@ -19,6 +19,7 @@
 </script>
 </head>
 <body data-doc="invoice">
+<a class="skip-link" href="#sheet">Skip to the invoice</a>
 <div class="app">
 
   <aside class="rail no-print">
@@ -128,9 +129,9 @@
       </form>
     </section>
 
-    <ul id="taxIssues" class="tax-issues no-print" aria-label="Tax invoice checks" hidden></ul>
+    <div role="status" class="no-print"><ul id="taxIssues" class="tax-issues" aria-label="Tax invoice checks" hidden></ul></div>
 
-    <article class="sheet" id="sheet">
+    <article class="sheet" id="sheet" tabindex="-1">
       <section class="sheet-head">
         <div class="from-block">
           <div class="logo-wrap">

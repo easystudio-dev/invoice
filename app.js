@@ -73,7 +73,12 @@ function addItem(data = { desc: '', qty: 1, unit: '', price: 0, vatCat: 'standar
   itemsBody.appendChild(tr);
   autosize(desc);
 
-  tr.querySelector('.del-row').addEventListener('click', () => { tr.remove(); recalc(); save(); });
+  tr.querySelector('.del-row').addEventListener('click', () => {
+    const neighbour = tr.nextElementSibling || tr.previousElementSibling;
+    tr.remove(); recalc(); save();
+    // The button that had focus is gone: put focus on a neighbouring line, or on Add line item.
+    (neighbour ? neighbour.querySelector('.item-desc') : document.getElementById('addItem')).focus();
+  });
   tr.querySelector('.move-up').addEventListener('click', () => moveRow(tr, -1, '.move-up'));
   tr.querySelector('.move-down').addEventListener('click', () => moveRow(tr, 1, '.move-down'));
   desc.addEventListener('input', () => autosize(desc));
@@ -99,11 +104,17 @@ function moveRow(tr, dir, btnSelector) {
 
 // The first row can't go up and the last can't go down. aria-disabled, not disabled: a disabled
 // button drops keyboard focus, which would strand someone who just moved a row to the end.
+// Every line has the same fields, so each gets its line number in its name ("Quantity, line 2"): a screen
+// reader user moving through the table needs to know which line a field belongs to.
+const LINE_LABELS = [['.item-desc', 'Description'], ['.item-qty', 'Quantity'], ['.item-unit', 'Unit (hrs, days, items)'],
+  ['.item-price', 'Unit price'], ['.item-vatcat', 'VAT category'], ['.move-up', 'Move line up'], ['.move-down', 'Move line down'], ['.del-row', 'Remove line']];
+
 function updateMoveButtons() {
   const rows = [...itemsBody.querySelectorAll('tr')];
   rows.forEach((tr, i) => {
     tr.querySelector('.move-up').setAttribute('aria-disabled', i === 0);
     tr.querySelector('.move-down').setAttribute('aria-disabled', i === rows.length - 1);
+    LINE_LABELS.forEach(([sel, name]) => tr.querySelector(sel).setAttribute('aria-label', `${name}, line ${i + 1}`));
   });
 }
 
@@ -187,6 +198,9 @@ function recalc() {
 function showTaxIssues(total) {
   const list = document.getElementById('taxIssues');
   const issues = taxInvoiceIssues(collectData(), total);
+  const key = issues.join('\n');
+  if (list.dataset.shown === key) return; // it sits in a live region: rewriting identical text would be read out again
+  list.dataset.shown = key;
   list.replaceChildren(...issues.map(text => Object.assign(document.createElement('li'), { textContent: text })));
   list.hidden = !issues.length;
 }
@@ -428,12 +442,13 @@ document.getElementById('printBtn').addEventListener('click', () => {
 window.addEventListener('afterprint', () => { document.title = APP_TITLE; });
 
 // Keeps business details, notes, logo and settings; clears the client and lines, bumps the number.
-document.getElementById('newInvoiceBtn').addEventListener('click', () => {
-  if (!confirm(`Start a new ${docName()}? Anything not saved on this one will be cleared. Your business details, notes and logo stay.`)) return;
-  const data = collectData();
+// A blank document of `type` that keeps the business details, notes and logo. `typed` is a number already on
+// screen that the new one must not reuse.
+function startNewDocument(type, typed) {
   applyData({
-    ...data,
-    invNumber: nextFreeNumber(getSavedList(), docKind(), data.invNumber.trim()),
+    ...collectData(),
+    docType: type,
+    invNumber: nextFreeNumber(getSavedList(), type, typed),
     invDate: localISODate(new Date()),
     dueDate: '',
     toName: '', toDetails: '', toEmail: '', paid: false, discountValue: '', quoteStatus: '', payments: [], creditFor: '', creditReason: '', repeat: '', lastRepeated: '',
@@ -443,6 +458,11 @@ document.getElementById('newInvoiceBtn').addEventListener('click', () => {
   setOpenInvoice('');
   refreshInvoiceList();
   save();
+}
+
+document.getElementById('newInvoiceBtn').addEventListener('click', () => {
+  if (!confirm(`Start a new ${docName()}? Anything not saved on this one will be cleared. Your business details, notes and logo stay.`)) return;
+  startNewDocument(docKind(), document.getElementById('invNumber').value.trim());
 });
 
 // --- Payment terms → auto due date ---
@@ -652,7 +672,7 @@ function renderRepeatDue(list, today) {
 function refreshInvoiceList() {
   const list = getSavedList();
   const today = localISODate(new Date());
-  const numbers = Object.keys(list).sort().reverse();
+  const numbers = Object.keys(list).sort(compareNumbers).reverse();
   const shown = numbers.filter(num => ledgerMatches(list, num, today, ledgerSearch.value, ledgerFilterEl.value));
   document.getElementById('invoiceCount').textContent = numbers.length || '';
   updateBackupNudge();
@@ -823,6 +843,8 @@ deleteInvoiceBtn.addEventListener('click', () => {
   store(LIST_KEY, JSON.stringify(list));
   setOpenInvoice('');
   refreshInvoiceList();
+  document.getElementById('saveStatus').textContent = `${capitalise(docName())} ${num} deleted. It is still on screen until you start a new one.`;
+  document.getElementById('saveInvoiceBtn').focus(); // the Delete button has just disappeared
 });
 
 // --- Backup (localStorage is wiped with browser data, so let people keep a file) ---
@@ -860,7 +882,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 document.getElementById('zohoBtn').addEventListener('click', () => {
   const list = getSavedList();
   const today = localISODate(new Date());
-  const numbers = Object.keys(list).sort().reverse()
+  const numbers = Object.keys(list).sort(compareNumbers).reverse()
     .filter(num => ledgerMatches(list, num, today, ledgerSearch.value, ledgerFilterEl.value))
     .filter(num => (list[num].docType || 'invoice') === 'invoice');
   if (!numbers.length) { alert('There are no invoices in the list to export. Quotes and credit notes aren’t included; check the search and filter.'); return; }
@@ -1227,6 +1249,21 @@ wf('welcomeSample').addEventListener('click', () => { applyWelcome(); loadSample
 wf('welcomeSkip').addEventListener('click', closeWelcome);
 document.getElementById('setupBtn').addEventListener('click', () => openWelcome(false));
 
+// --- Launch shortcuts. The manifest's "New invoice" and "New quote" open /?new=invoice and /?new=quote. The query is
+// removed afterwards so a reload doesn't start another. If there is work on screen that isn't saved, ask first.
+function handleLaunchShortcut() {
+  const type = new URLSearchParams(location.search).get('new');
+  if (type === null) return;
+  if (window.history && history.replaceState) history.replaceState(null, '', location.pathname + location.hash);
+  if (type !== 'invoice' && type !== 'quote') return;
+  const blank = !openInvoice && !document.getElementById('toName').value.trim() &&
+    [...itemsBody.querySelectorAll('.item-desc')].every(el => !el.value.trim());
+  if (!blank && !confirmDiscard(`Start a new ${type}`)) return;
+  // The number on screen only matters when it is in the sequence we are about to number (an invoice for a new invoice).
+  startNewDocument(type, !blank && docKind() === type ? document.getElementById('invNumber').value.trim() : '');
+  document.getElementById('toName').focus();
+}
+
 // --- Start. In IndexedDB mode the saved list is read from the database first; until then the page is inert, so an
 // early click can't save over documents that haven't loaded. localStorage mode has nothing to wait for.
 const appEl = document.querySelector('.app');
@@ -1237,6 +1274,7 @@ function start() {
   recalc();
   if (!load(ONBOARD_KEY) && !Object.keys(getSavedList()).length && !wf('fromName').value.trim() && !wf('fromDetails').value.trim()) openWelcome(true);
   appEl.inert = false;
+  handleLaunchShortcut();
   if (folderSync) folderSync.resume().then(docs => { if (docs) mergeFromFolder(docs, false); }).catch(() => {});
 }
 if (storage.mode === 'localstorage') start();

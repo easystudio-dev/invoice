@@ -730,7 +730,7 @@ test('stampChanges: keep leaves every stamp as given; unsafe keys and non-docume
   assert.deepStrictEqual(out, { A: [1], B: { n: 2, updatedAt: 9 } });
 });
 
-const { hasVatNumber, taxInvoiceIssues, backupNudge, parseBackup, makeBackup, BACKUP_VERSION } = require('./lib.js');
+const { compareNumbers, hasVatNumber, taxInvoiceIssues, backupNudge, parseBackup, makeBackup, BACKUP_VERSION } = require('./lib.js');
 
 test('hasVatNumber: 10 digits starting with 4, spaces and dashes allowed, not inside longer numbers', () => {
   assert.strictEqual(hasVatNumber('VAT No. 4123456789'), true);
@@ -837,4 +837,21 @@ test('mergeSync: a conflict on a deleted document is not a conflict; old records
   const m = mergeSync({ A: { n: 1 } }, {}, { A: { n: 2 } }, { A: base, OLD: base - DELETION_KEEP_MS - 1 }, 'folder', base + 10);
   assert.deepStrictEqual([m.merged, m.conflicts, m.replaced, m.removed], [{}, [], [], ['A']]);
   assert.deepStrictEqual(m.deleted, { A: base });
+});
+
+test('compareNumbers: digits compare by value, so INV-9 comes before INV-10', () => {
+  const sorted = a => [...a].sort(compareNumbers);
+  assert.deepStrictEqual(sorted(['INV-10', 'INV-9', 'INV-100', 'INV-2']), ['INV-2', 'INV-9', 'INV-10', 'INV-100']);
+  assert.deepStrictEqual(sorted(['INV-0010', 'INV-0009', 'INV-0100']), ['INV-0009', 'INV-0010', 'INV-0100']);
+  assert.deepStrictEqual(sorted(['2026-10', '2026-9', '2025-12']), ['2025-12', '2026-9', '2026-10']);
+  assert.deepStrictEqual(sorted(['B-1', 'A-2', 'A-10']), ['A-2', 'A-10', 'B-1']);
+  assert.deepStrictEqual(sorted(['INV-7', 'INV-007', 'INV']), ['INV', 'INV-007', 'INV-7']); // padding only: text order breaks the tie
+  assert.deepStrictEqual(sorted(['9'.repeat(20), '1' + '0'.repeat(20), '5']), ['5', '9'.repeat(20), '1' + '0'.repeat(20)]);
+  assert.strictEqual(compareNumbers('INV-1', 'INV-1'), 0);
+});
+
+test('nextNumberAfter and nextFreeNumber find the highest number even without padding', () => {
+  assert.strictEqual(nextNumberAfter(['INV-9', 'INV-10', 'INV-2'], 'X'), 'INV-11');
+  assert.strictEqual(nextFreeNumber({ 'INV-9': {}, 'INV-10': {} }, 'invoice'), 'INV-11');
+  assert.strictEqual(nextFreeNumber({ 'INV-0009': {}, 'INV-0010': {} }, 'invoice'), 'INV-0011');
 });

@@ -84,10 +84,30 @@ function nextInvoiceNumber(num) {
   return num ? num + '-2' : 'INV-0001';
 }
 
+// Orders document numbers the way people read them: runs of digits by value, so INV-9 < INV-10 and INV-0009 <
+// INV-0010. Text runs compare as plain text; numbers that only differ in padding fall back to text order.
+function compareNumbers(a, b) {
+  const parts = s => String(s).match(/\d+|\D+/g) || [];
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i];
+    const y = pb[i];
+    if (x === y) continue;
+    if (/^\d/.test(x) && /^\d/.test(y)) {
+      const sx = x.replace(/^0+/, '');
+      const sy = y.replace(/^0+/, '');
+      if (sx.length !== sy.length) return sx.length - sy.length;
+      if (sx !== sy) return sx < sy ? -1 : 1;
+    } else return x < y ? -1 : 1;
+  }
+  if (pa.length !== pb.length) return pa.length - pb.length;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 // Number after the highest of `numbers`, or `fallback` when there are none.
-// ponytail: plain string sort, so it assumes zero-padded numbers (INV-0009 < INV-0010).
 function nextNumberAfter(numbers, fallback) {
-  return numbers.length ? nextInvoiceNumber([...numbers].sort().pop()) : fallback;
+  return numbers.length ? nextInvoiceNumber([...numbers].sort(compareNumbers).pop()) : fallback;
 }
 
 const FIRST_NUMBERS = { invoice: 'INV-0001', quote: 'QUO-0001', credit: 'CN-0001' };
@@ -241,7 +261,7 @@ function dueRepeats(list, today) {
   return Object.keys(list || {})
     .map(num => ({ num, date: nextRepeatDate(list[num]) }))
     .filter(r => r.date && r.date <= today)
-    .sort((a, b) => a.date.localeCompare(b.date) || a.num.localeCompare(b.num));
+    .sort((a, b) => a.date.localeCompare(b.date) || compareNumbers(a.num, b.num));
 }
 
 // One CSV cell, RFC 4180: quoted when it holds a comma, quote, CR or LF, inner quotes doubled.
@@ -586,4 +606,4 @@ function parseBackup(text) {
   return { invoices, logo: typeof data.logo === 'string' ? data.logo : null };
 }
 
-if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, parseTombstone, mergeLists, mergeSync, pruneDeleted, DELETED_FOLDER, DELETION_KEEP_MS, editTime, stampChanges, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };
+if (typeof module === 'object') module.exports = { compareNumbers, hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, parseTombstone, mergeLists, mergeSync, pruneDeleted, DELETED_FOLDER, DELETION_KEEP_MS, editTime, stampChanges, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

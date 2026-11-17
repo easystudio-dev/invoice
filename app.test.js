@@ -1611,3 +1611,162 @@ test('the app code makes no network requests of its own', () => {
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\bfetch\s*\(|XMLHttpRequest|sendBeacon|new WebSocket|new EventSource/, `${file} makes a network request`);
   }
 });
+
+// --- Accessibility ---
+test('line fields name their line, and the names follow adds, removals and moves', () => {
+  const { $, d, type } = boot();
+  $('#addItem').click();
+  $('#addItem').click();
+  const names = sel => [...d.querySelectorAll(`#itemsBody ${sel}`)].map(el => el.getAttribute('aria-label'));
+  assert.deepStrictEqual(names('.item-qty'), ['Quantity, line 1', 'Quantity, line 2', 'Quantity, line 3']);
+  assert.deepStrictEqual(names('.del-row'), ['Remove line, line 1', 'Remove line, line 2', 'Remove line, line 3']);
+  assert.strictEqual(d.querySelector('#itemsBody tr .move-up').getAttribute('aria-label'), 'Move line up, line 1');
+  type(d.querySelectorAll('.item-desc')[1], 'Second');
+  d.querySelectorAll('.del-row')[0].click();
+  assert.deepStrictEqual(names('.item-desc'), ['Description, line 1', 'Description, line 2']);
+  assert.strictEqual(d.querySelector('.item-desc').value, 'Second');
+});
+
+test('removing a line puts focus on a neighbouring line; removing the last one goes to Add line item', () => {
+  const { $, d, w } = boot();
+  d.body.append(...[]);
+  $('#addItem').click();
+  $('#addItem').click();
+  const rows = () => [...d.querySelectorAll('#itemsBody tr')];
+  rows()[1].querySelector('.del-row').click();
+  assert.strictEqual(d.activeElement, rows()[1].querySelector('.item-desc')); // the line that followed
+  rows()[1].querySelector('.del-row').click();
+  assert.strictEqual(d.activeElement, rows()[0].querySelector('.item-desc')); // last line removed: the one before
+  rows()[0].querySelector('.del-row').click();
+  assert.strictEqual(d.activeElement, $('#addItem'));
+});
+
+test('deleting a document announces it and keeps focus on a visible button', () => {
+  const { $, d } = boot({ seed: { 'invoice-onboarded': '1', 'invoice-list': { 'INV-0003': inv('INV-0003') } } });
+  d.querySelector('.ledger-row').click();
+  $('#deleteInvoiceBtn').click();
+  assert.match($('#saveStatus').textContent, /INV-0003 deleted/);
+  assert.strictEqual(d.activeElement, $('#saveInvoiceBtn'));
+  assert.strictEqual($('#saveStatus').getAttribute('role'), 'status');
+});
+
+test('skip link is the first thing in the page and lands on the invoice', () => {
+  const { $, d } = boot();
+  const first = d.body.firstElementChild;
+  assert.strictEqual(first.className, 'skip-link');
+  assert.strictEqual(first.getAttribute('href'), '#sheet');
+  assert.strictEqual($('#sheet').getAttribute('tabindex'), '-1');
+});
+
+test('tax advice sits in a live region and is rewritten only when it changes', () => {
+  const { $, type } = boot();
+  assert.strictEqual($('#taxIssues').parentElement.getAttribute('role'), 'status');
+  type('#vatToggle', true);
+  const first = $('#taxIssues li');
+  assert.ok(first);
+  type('#notes', 'unrelated edit');
+  assert.strictEqual($('#taxIssues li'), first); // same node: a screen reader is not told again
+  type('#fromName', 'Me');
+  assert.notStrictEqual($('#taxIssues li').textContent, first.textContent);
+});
+
+test('the ledger lists documents in number order even without zero padding', () => {
+  const { d } = boot({ seed: { 'invoice-onboarded': '1', 'invoice-list': { 'INV-9': inv('INV-9'), 'INV-10': inv('INV-10'), 'INV-2': inv('INV-2') } } });
+  assert.deepStrictEqual([...d.querySelectorAll('.ledger-num')].map(e => e.textContent), ['INV-10', 'INV-9', 'INV-2']);
+});
+
+test('axe finds no accessibility violations in the main states', async () => {
+  const axe = require('axe-core');
+  const states = {
+    'first run': boot(),
+    'saved documents': boot({ seed: { 'invoice-onboarded': '1', 'invoice-list': { 'INV-0003': inv('INV-0003', { vatToggle: true, payments: [{ date: '2026-01-01', amount: '10', note: 'EFT' }] }), 'QUO-0001': inv('QUO-0001', { docType: 'quote' }) } } }),
+  };
+  states['saved documents'].d.querySelector('.ledger-row').click();
+  states['VAT on, advice showing'] = boot({ seed: { 'invoice-onboarded': '1' } });
+  states['VAT on, advice showing'].type('#vatToggle', true);
+  states['setup guide reopened'] = boot({ seed: { 'invoice-onboarded': '1' } });
+  states['setup guide reopened'].$('#setupBtn').click();
+  for (const [name, { w }] of Object.entries(states)) {
+    w.eval(axe.source);
+    const result = await w.axe.run(w.document, { rules: { 'color-contrast': { enabled: false } } }); // jsdom has no layout: contrast is checked below
+    // Array.from: the result comes from jsdom's realm, so its arrays have another prototype than Node's
+    const found = Array.from(result.violations, v => `${v.id}: ${Array.from(v.nodes, n => n.target.join(' ')).join(', ')}`);
+    assert.deepStrictEqual(found, [], name);
+  }
+});
+
+test('text colours meet WCAG AA contrast on every surface, in light and dark', () => {
+  const css = require('fs').readFileSync('style.css', 'utf8');
+  const block = sel => Object.fromEntries([...css.slice(css.indexOf(sel)).split('}')[0].matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map(m => [m[1], m[2]]));
+  const light = block(':root {');
+  const dark = { ...light, ...block(':root[data-theme="dark"] {') };
+  const lum = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  assert.ok(light.ink && light.muted && dark.ink && dark.desk, 'colour tokens were not found in style.css');
+  const failures = [];
+  for (const [theme, t] of [['light', light], ['dark', dark]]) {
+    for (const fg of ['ink', 'muted', 'paid', 'overdue', 'part', 'credit']) {
+      for (const bg of ['desk', 'rail', 'surface']) if (ratio(t[fg], t[bg]) < 4.5) failures.push(`${theme}: ${fg} on ${bg} = ${ratio(t[fg], t[bg]).toFixed(2)}`);
+    }
+  }
+  // The paper stays light in both themes, so its text colours are the light ones on white.
+  for (const fg of ['ink', 'muted', 'paid', 'overdue', 'part', 'credit']) if (ratio(light[fg], '#ffffff') < 4.5) failures.push(`paper: ${fg}`);
+  if (ratio('#8a9288', '#ffffff') < 3) failures.push('control outline on paper < 3:1');
+  assert.deepStrictEqual(failures, []);
+});
+
+// --- Manifest shortcuts ---
+test('manifest: shortcuts stay in scope and point at real icons; id matches the start URL', () => {
+  const fs = require('fs');
+  const m = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
+  const base = 'http://localhost/app/';
+  const inScope = u => new URL(u, base).href.startsWith(new URL(m.scope, base).href);
+  assert.strictEqual(new URL(m.id, base).href, new URL(m.start_url, base).href);
+  assert.ok(m.shortcuts.length >= 2 && m.shortcuts.length <= 4);
+  for (const s of m.shortcuts) {
+    assert.ok(s.name && s.short_name && s.short_name.length <= 12, s.name);
+    assert.ok(inScope(s.url), s.url);
+    for (const icon of s.icons) assert.ok(fs.existsSync(icon.src), icon.src);
+  }
+  assert.deepStrictEqual(m.shortcuts.map(s => s.url), ['./?new=invoice', './?new=quote']);
+  for (const icon of m.icons) assert.ok(fs.existsSync(icon.src), icon.src);
+});
+
+test('launch shortcut ?new=quote opens a blank quote and cleans the address', () => {
+  const { $, w } = boot({ url: 'http://localhost/?new=quote', seed: { 'invoice-onboarded': '1', 'invoice-draft': { fromName: 'Studio One' } } });
+  assert.strictEqual($('#docType').value, 'quote');
+  assert.strictEqual($('#invNumber').value, 'QUO-0001');
+  assert.strictEqual($('.doc-title').textContent, 'QUOTE');
+  assert.strictEqual($('#fromName').value, 'Studio One');
+  assert.strictEqual(w.location.search, '');
+  assert.strictEqual(w.document.activeElement, $('#toName'));
+});
+
+test('launch shortcut ?new=invoice from a quote on screen, with nothing unsaved, starts an invoice without asking', () => {
+  let asked = 0;
+  const { $, w } = boot({ url: 'http://localhost/?new=invoice', seed: { 'invoice-onboarded': '1', 'invoice-draft': { docType: 'quote', invNumber: 'QUO-0001', items: [{ desc: '', qty: 1, price: 0 }] } } });
+  assert.strictEqual($('#docType').value, 'invoice');
+  assert.strictEqual($('#invNumber').value, 'INV-0001');
+});
+
+test('launch shortcut asks before replacing work that is not saved; Cancel keeps it', () => {
+  const draft = { toName: 'Acme', invNumber: 'INV-0005', items: [{ desc: 'Work', qty: 1, price: 100 }] };
+  const kept = boot({ url: 'http://localhost/?new=quote', confirm: false, seed: { 'invoice-onboarded': '1', 'invoice-draft': draft } });
+  assert.strictEqual(kept.$('#toName').value, 'Acme');
+  assert.strictEqual(kept.$('#docType').value, 'invoice');
+  assert.strictEqual(kept.w.location.search, '');
+  const replaced = boot({ url: 'http://localhost/?new=quote', confirm: true, seed: { 'invoice-onboarded': '1', 'invoice-draft': draft } });
+  assert.strictEqual(replaced.$('#toName').value, '');
+  assert.strictEqual(replaced.$('#docType').value, 'quote');
+  assert.strictEqual(replaced.$('#invNumber').value, 'QUO-0001');
+});
+
+test('an unknown or empty ?new value changes nothing but is still removed from the address', () => {
+  for (const q of ['?new=credit', '?new=', '?new=%3Cscript%3E']) {
+    const { $, w } = boot({ url: `http://localhost/${q}`, seed: { 'invoice-onboarded': '1' } });
+    assert.strictEqual($('#docType').value, 'invoice');
+    assert.strictEqual(w.location.search, '', q);
+  }
+  const { w } = boot({ url: 'http://localhost/?other=1&new=quote#top', seed: { 'invoice-onboarded': '1' } });
+  assert.strictEqual(w.location.hash, '#top');
+});

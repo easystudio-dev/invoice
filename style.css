@@ -469,13 +469,13 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
   transition: opacity .1s, color .1s;
 }
 /* touch screens have no hover — keep delete visible */
-@media (hover: none) { .del-row, .move-row { opacity: .6; } }
+@media (hover: none) { .del-row, .move-row { opacity: .85; } }
 .items tbody tr:hover .del-row, .del-row:focus-visible,
 .items tbody tr:hover .move-row, .move-row:focus-visible { opacity: 1; }
 .del-row:hover { color: var(--overdue); }
 
 /* small stacked arrows, one above the other, so the column stays narrow */
-.move-row { display: block; font-size: 10px; min-width: 28px; padding: 4px 8px; }
+.move-row { display: block; font-size: 10px; min-width: 28px; min-height: 24px; padding: 4px 8px; } /* WCAG 2.2: targets at least 24px */
 .move-row:hover { color: var(--ink); }
 .move-row[aria-disabled="true"] { opacity: .25 !important; cursor: default; }
 .move-row[aria-disabled="true"]:hover { color: var(--muted); }
@@ -672,3 +672,8 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .doc-lead { font-size: 17px; }
 .doc-foot { margin-top: 32px; font-size: 13px; color: var(--muted); }
 .doc-page code { font-size: 0.92em; }
+
+/* Skip link: off screen until it gets keyboard focus */
+.skip-link { position: absolute; left: 8px; top: -60px; z-index: 100; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--desk); font-weight: 600; text-decoration: none; }
+.skip-link:focus { top: 8px; }
+.sheet:focus { outline: none; } /* it only takes focus from the skip link, not from the keyboard */
