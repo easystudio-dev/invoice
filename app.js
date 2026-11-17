@@ -38,9 +38,19 @@ function money(n, currency = document.getElementById('currency').value) {
   return (n || 0).toLocaleString(CURRENCY_LOCALES[currency] || 'en-ZA', { style: 'currency', currency });
 }
 
+// Text boxes on the sheet grow to show all their text, on screen and on paper: a clipped line (a VAT number, say)
+// would otherwise be cut off the printed invoice. Browsers with `field-sizing: content` (Chromium) do it in CSS,
+// so print layout is exact; elsewhere this measures the text and sets the height.
+const CSS_GROWS = !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'));
 function autosize(ta) {
+  if (CSS_GROWS) return;
   ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
+  if (!ta.scrollHeight) { ta.style.height = ''; return; } // not displayed (e.g. the credit-note reason): measure when it is
+  ta.style.height = (ta.scrollHeight + ta.offsetHeight - ta.clientHeight) + 'px'; // plus the border
+}
+
+function autosizeAll() {
+  document.querySelectorAll('#sheet textarea').forEach(autosize);
 }
 
 function addItem(data = { desc: '', qty: 1, unit: '', price: 0, vatCat: 'standard' }, focus = false) {
@@ -328,6 +338,7 @@ function applyData(data) {
   itemsBody.innerHTML = '';
   (data.items || []).forEach(item => addItem(item));
   recalc();
+  autosizeAll();
 }
 
 // Small settings and the unsaved draft live in localStorage. It throws when full (or when the browser blocks it),
@@ -433,7 +444,10 @@ function openMail(url) { window.location.href = url; }
 
 // --- PDF filename (browser print/save-as-PDF uses the document title) ---
 const APP_TITLE = document.title;
+window.addEventListener('beforeprint', autosizeAll);
+window.addEventListener('resize', autosizeAll); // a different width wraps the text differently
 document.getElementById('printBtn').addEventListener('click', () => {
+  autosizeAll();
   const num = document.getElementById('invNumber').value.trim() || docName();
   const client = document.getElementById('toName').value.trim();
   document.title = `${capitalise(docName())} ${num}${client ? ' - ' + client : ''}`;
@@ -1016,7 +1030,7 @@ document.getElementById('addPaymentBtn').addEventListener('click', addPayment);
 }));
 payDate.value = localISODate(new Date());
 // Every edit on the sheet (fields, line items, checkboxes, selects) bubbles up here.
-document.getElementById('sheet').addEventListener('input', () => { recalc(); save(); });
+document.getElementById('sheet').addEventListener('input', (e) => { if (e.target.matches('textarea')) autosize(e.target); recalc(); save(); });
 
 // --- Logo upload ---
 const logoDrop = document.getElementById('logoDrop');

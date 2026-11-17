@@ -1795,3 +1795,59 @@ test('control outlines and field backgrounds off the paper keep 3:1 contrast in 
     assert.ok(ratio(t.ink, t['field-bg']) >= 4.5, `${theme}: text in field`);
   }
 });
+
+// --- Text boxes grow to fit their text (a clipped line would be cut off a printed invoice) ---
+function stubScrollHeight(w, px) {
+  Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get() { return px(this); } });
+}
+
+test('without field-sizing, From / Bill to / Notes are sized to their text when typed in and when a document opens', () => {
+  const { $, d, w, type } = boot({ seed: { 'invoice-onboarded': '1', 'invoice-list': { 'INV-0003': inv('INV-0003', { fromDetails: 'a\nb\nc\nd', toDetails: 'x\ny' }) } } });
+  stubScrollHeight(w, el => 20 * (el.value.split('\n').length));
+  type('#fromDetails', '1\n2\n3\n4\n5');
+  assert.strictEqual($('#fromDetails').style.height, '100px');
+  type('#notes', 'one line');
+  assert.strictEqual($('#notes').style.height, '20px');
+  d.querySelector('.ledger-row').click();
+  assert.strictEqual($('#fromDetails').style.height, '80px');
+  assert.strictEqual($('#toDetails').style.height, '40px');
+});
+
+test('a text box that is not displayed has its fixed height cleared, so it is not left collapsed', () => {
+  const { $, w, type } = boot();
+  stubScrollHeight(w, () => 0); // what a display:none textarea reports
+  $('#creditReason').style.height = '50px';
+  type('#creditReason', 'x');
+  assert.strictEqual($('#creditReason').style.height, '');
+});
+
+test('Download PDF re-measures every text box before printing', () => {
+  const { $, w, type } = boot();
+  let printed = false;
+  w.print = () => { printed = true; assert.strictEqual($('#toDetails').style.height, '60px'); };
+  stubScrollHeight(w, el => 20 * (el.value.split('\n').length));
+  $('#toDetails').value = 'a\nb\nc'; // set without an input event, as a restored draft would be
+  $('#printBtn').click();
+  assert.ok(printed);
+});
+
+test('where the browser supports field-sizing, the sheet text boxes grow by CSS alone', () => {
+  assert.match(require('fs').readFileSync('style.css', 'utf8'), /\.sheet textarea\s*\{\s*field-sizing:\s*content/);
+});
+
+test('manifest screenshots: wide and narrow, files exist and match the sizes they claim', () => {
+  const fs = require('fs');
+  const m = JSON.parse(fs.readFileSync('manifest.webmanifest', 'utf8'));
+  const byForm = f => m.screenshots.filter(s => s.form_factor === f);
+  assert.ok(byForm('wide').length >= 1 && byForm('narrow').length >= 1);
+  for (const s of m.screenshots) {
+    assert.ok(s.label, s.src);
+    assert.strictEqual(s.type, 'image/png');
+    const png = fs.readFileSync(s.src);
+    assert.strictEqual(png.subarray(1, 4).toString(), 'PNG', s.src);
+    assert.strictEqual(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`, s.sizes, `${s.src} is not the size the manifest says`);
+    const [w, h] = s.sizes.split('x').map(Number);
+    assert.ok(Math.min(w, h) >= 320 && Math.max(w, h) <= 3840 && Math.max(w, h) / Math.min(w, h) <= 2.3, `${s.src} is outside the sizes Chrome accepts`);
+    assert.ok(s.form_factor === 'wide' ? w > h : h > w, `${s.src} is not ${s.form_factor}`);
+  }
+});

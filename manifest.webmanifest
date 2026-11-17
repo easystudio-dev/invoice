@@ -58,5 +58,35 @@
         }
       ]
     }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshots/wide-light.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "A tax invoice with the ledger of saved invoices beside it"
+    },
+    {
+      "src": "screenshots/wide-dark.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "The same invoice in dark mode"
+    },
+    {
+      "src": "screenshots/narrow-invoice.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Creating an invoice on a phone"
+    },
+    {
+      "src": "screenshots/narrow-ledger.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "The ledger on a phone, showing what is outstanding and overdue"
+    }
   ]
 }
