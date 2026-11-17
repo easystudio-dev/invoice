@@ -88,6 +88,46 @@
       </div>
     </div>
 
+    <section id="welcome" class="welcome no-print" aria-labelledby="welcomeTitle" hidden>
+      <h2 id="welcomeTitle">Set up your business</h2>
+      <p class="welcome-lead">Fill in what you like; every question is optional. The answers go on your invoices and are kept for each new one. They stay on this device — <a href="privacy.html">how your data is handled</a>.</p>
+      <form id="welcomeForm" class="welcome-form">
+        <div class="welcome-grid">
+          <label for="wName">Business or your name</label>
+          <input id="wName" autocomplete="organization">
+          <label for="wDetails">Address, phone, email</label>
+          <textarea id="wDetails" rows="3" autocomplete="off"></textarea>
+          <span class="welcome-check"><label><input type="checkbox" id="wVat"> I’m registered for VAT</label></span>
+          <div id="wVatRow" class="welcome-vat" hidden>
+            <label for="wVatNo">VAT number</label>
+            <input id="wVatNo" inputmode="numeric" autocomplete="off" aria-describedby="wVatMsg">
+            <p id="wVatMsg" class="welcome-msg" role="status"></p>
+          </div>
+        </div>
+        <fieldset class="welcome-bank">
+          <legend>Bank details for EFT (printed as “Pay by EFT”)</legend>
+          <div class="welcome-grid">
+            <label for="wBank">Bank</label><input id="wBank" autocomplete="off">
+            <label for="wHolder">Account holder</label><input id="wHolder" autocomplete="off">
+            <label for="wAccount">Account number</label><input id="wAccount" inputmode="numeric" autocomplete="off">
+            <label for="wBranch">Branch code</label><input id="wBranch" inputmode="numeric" autocomplete="off">
+            <label for="wType">Account type</label>
+            <select id="wType">
+              <option value="">Not shown</option>
+              <option value="cheque">Cheque / Current</option>
+              <option value="savings">Savings</option>
+              <option value="transmission">Transmission</option>
+            </select>
+          </div>
+        </fieldset>
+        <div class="welcome-actions">
+          <button type="submit" class="btn btn-primary">Save and start</button>
+          <button type="button" id="welcomeSample" class="btn">Try a sample invoice</button>
+          <button type="button" id="welcomeSkip" class="btn btn-quiet">Skip for now</button>
+        </div>
+      </form>
+    </section>
+
     <ul id="taxIssues" class="tax-issues no-print" aria-label="Tax invoice checks" hidden></ul>
 
     <article class="sheet" id="sheet">
@@ -297,6 +337,7 @@
       <button id="exportBtn" type="button" class="btn btn-quiet" title="Download all saved invoices as a backup file">Export backup</button>
       <button id="importBtn" type="button" class="btn btn-quiet" title="Restore saved invoices from a backup file">Import backup</button>
       <button id="zohoBtn" type="button" class="btn btn-quiet" title="Download the listed invoices as a CSV for Zoho Books’ invoice import">Export for Zoho Books</button>
+      <button id="setupBtn" type="button" class="btn btn-quiet" title="Open the business setup again">Setup guide</button>
       <button id="installBtn" type="button" class="btn btn-quiet" hidden title="Install this app on your device">Install app</button>
       <button id="folderBtn" type="button" class="btn btn-quiet" hidden title="Also save every invoice as a file in a folder you choose">Save to folder…</button>
       <input id="importInput" type="file" accept="application/json,.json" class="visually-hidden" tabindex="-1" aria-hidden="true">
@@ -325,7 +366,7 @@
     <p id="installHelp" class="footnote" role="status" hidden>To install: tap the Share button, then “Add to Home Screen”.</p>
     <p id="backupNudge" class="footnote nudge" role="status" hidden></p>
     <p id="folderStatus" class="footnote" role="status"></p>
-    <p class="footnote">Everything stays in this browser — no account, nothing uploaded. Clearing your browser data deletes your invoices, so export a backup now and then.</p>
+    <p class="footnote">Everything stays in this browser — no account, nothing uploaded. Clearing your browser data deletes your invoices, so export a backup now and then. <a href="privacy.html">Privacy</a></p>
     <p class="footnote">Made by <a href="https://www.easystudio.co.za" target="_blank" rel="noopener">EasyStudio</a></p>
   </footer>
 </div>

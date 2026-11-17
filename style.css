@@ -637,3 +637,38 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .tax-issues { list-style: none; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-strong); border-left: 3px solid var(--overdue); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--ink); }
 .tax-issues li + li { margin-top: 4px; }
 .footnote.nudge { color: var(--ink); max-width: 34ch; padding-left: 8px; border-left: 3px solid var(--overdue); }
+
+/* First-run setup card (screen only) */
+.welcome { margin: 0 0 14px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); max-width: 640px; }
+.welcome h2 { margin: 0 0 4px; font-size: 18px; }
+.welcome-lead { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.welcome-lead a { color: inherit; }
+.welcome-grid { display: grid; grid-template-columns: minmax(110px, 160px) 1fr; gap: 8px 12px; align-items: start; }
+.welcome-grid label { font-size: 13px; padding-top: 7px; }
+.welcome-grid input:not([type=checkbox]), .welcome-grid textarea, .welcome-grid select { width: 100%; min-width: 0; font: inherit; }
+.welcome-check { grid-column: 2; font-size: 13px; }
+.welcome-check label { padding: 0; }
+.welcome-vat { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; gap: 4px 12px; }
+.welcome-vat .welcome-msg { grid-column: 2; }
+.welcome-msg { margin: 0; min-height: 1em; font-size: 12px; color: var(--overdue); }
+.welcome-bank { margin: 14px 0 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.welcome-bank legend { padding: 0 6px; font-size: 12px; color: var(--muted); }
+.welcome-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+@media (max-width: 520px) {
+  .welcome-grid { grid-template-columns: 1fr; }
+  .welcome-grid label { padding-top: 0; }
+  .welcome-check, .welcome-vat .welcome-msg { grid-column: 1; }
+  .welcome-vat { grid-template-columns: 1fr; }
+}
+
+/* Plain text pages (privacy) */
+.doc-body { background: var(--desk); color: var(--ink); }
+.doc-page { max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; line-height: 1.55; }
+.doc-page h1 { margin: 12px 0 6px; font-size: 28px; }
+.doc-page h2 { margin: 28px 0 8px; font-size: 17px; }
+.doc-page ul { padding-left: 20px; }
+.doc-page li { margin-bottom: 8px; }
+.doc-page a { color: inherit; }
+.doc-lead { font-size: 17px; }
+.doc-foot { margin-top: 32px; font-size: 13px; color: var(--muted); }
+.doc-page code { font-size: 0.92em; }

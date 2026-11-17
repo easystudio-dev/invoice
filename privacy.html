@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy · Invoice Generator</title>
+<meta name="description" content="How Invoice Generator handles your data: it stays on your device.">
+<meta name="theme-color" content="#dfe3dc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171b19" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="style.css">
+<script>
+  var t;
+  try { t = localStorage.getItem('theme'); } catch (e) {}
+  t = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', t);
+</script>
+</head>
+<body class="doc-body">
+<main class="doc-page">
+  <p><a href="./">← Back to the invoice generator</a></p>
+  <h1>Privacy</h1>
+  <p class="doc-lead">Your invoices, clients and bank details stay on your device. This app has no account system and no server that receives them.</p>
+
+  <h2>Where your data lives</h2>
+  <ul>
+    <li><strong>In your browser.</strong> Saved documents and your logo are kept in this browser’s storage (IndexedDB, or localStorage if IndexedDB isn’t available). Small settings such as dark mode and your unsaved draft are in localStorage. Storage belongs to this exact web address: another browser, another device or another address starts empty.</li>
+    <li><strong>In a folder you choose (optional).</strong> If you press “Save to folder…”, each document is also written as a file in that folder, inside one subfolder per client. Deleted documents leave a small record (the number and the time) in a <code>_deleted</code> subfolder for up to 180 days, so the deletion reaches your other computers.</li>
+    <li><strong>In backup files you make.</strong> “Export backup” downloads a file with all your saved documents and logo to your device.</li>
+  </ul>
+
+  <h2>What this app does not do</h2>
+  <ul>
+    <li>No account, no sign-in, no email address needed.</li>
+    <li>No analytics, tracking, advertising or profiling.</li>
+    <li>No cookies set by the app.</li>
+    <li>No third-party scripts, fonts or images: everything the page uses is served from the same address.</li>
+    <li>The app never sends your invoices, clients or bank details anywhere.</li>
+  </ul>
+
+  <h2>What leaves your device, and only when you act</h2>
+  <ul>
+    <li><strong>Email.</strong> The Email button opens your own email app with a message already written: the document number, total, due date, client name, your business name and, if set, your payment link. Your email provider handles it from there. The PDF is not attached for you.</li>
+    <li><strong>Payment link and QR code.</strong> The QR code is drawn on your device. The link opens your payment provider only when you or your client open it.</li>
+    <li><strong>Print or Download PDF.</strong> This uses your browser’s print system. Where the PDF goes after that depends on your browser and device.</li>
+    <li><strong>A synced folder.</strong> If the folder you pick is inside Dropbox, Google Drive, OneDrive or similar, that service copies the files under its own terms.</li>
+    <li><strong>Zoho Books export.</strong> This downloads a CSV file to your device. Nothing is uploaded; you import it yourself.</li>
+  </ul>
+
+  <h2>The web host</h2>
+  <p>The page you are reading is served by a web host. Like any website, it can see that a visit happened (your IP address, the time and which file was requested) and may keep ordinary server logs. It cannot see your invoices, because the app never sends them. Once the app is installed it works offline and loads from your device.</p>
+
+  <h2>Your control and your risks</h2>
+  <ul>
+    <li><strong>Clearing your browser’s site data deletes your saved documents.</strong> The app asks the browser to keep its storage and reminds you to back up, but a backup file or a connected folder is what protects you.</li>
+    <li><strong>Shared computers.</strong> Anyone who can open this browser profile can open your invoices. Use your own profile, and clear the site data on a computer that isn’t yours.</li>
+    <li><strong>Backups and folders hold client details and amounts.</strong> Keep them somewhere you trust.</li>
+    <li><strong>To delete everything:</strong> delete your documents in the app, clear this site’s data in your browser settings, and delete any backup files and the folder you chose.</li>
+  </ul>
+
+  <h2>Your clients’ information</h2>
+  <p>Invoices contain other people’s names, addresses and VAT numbers. Under POPIA you are responsible for that information, not this app. Keep only what you need, and look after your backups. This page describes how the app works; it is not legal advice.</p>
+
+  <p class="doc-foot">Last updated 17 November 2026. Made by <a href="https://www.easystudio.co.za" target="_blank" rel="noopener">EasyStudio</a>.</p>
+</main>
+</body>
+</html>

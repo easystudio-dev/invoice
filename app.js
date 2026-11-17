@@ -1144,6 +1144,89 @@ installBtn.addEventListener('click', async () => {
   try { await e.prompt(); } catch { /* already used or blocked */ }
 });
 
+// --- First-run setup. A card above the sheet asks for the business details once. Every question is optional and
+// the answers fill the same fields as on the sheet, so they carry over to every new document. It shows only to
+// someone with no saved documents and no details yet, until they save, try the sample or skip; the footer's
+// "Setup guide" opens it again.
+const ONBOARD_KEY = 'invoice-onboarded';
+const welcomeEl = document.getElementById('welcome');
+const wf = id => document.getElementById(id);
+
+function openWelcome(firstRun) {
+  if (!firstRun) { // reopened: start from what is on the sheet
+    wf('wName').value = wf('fromName').value;
+    wf('wDetails').value = wf('fromDetails').value;
+    wf('wVat').checked = wf('vatToggle').checked;
+    wf('wBank').value = wf('bankName').value;
+    wf('wHolder').value = wf('bankHolder').value;
+    wf('wAccount').value = wf('bankAccount').value;
+    wf('wBranch').value = wf('bankBranch').value;
+    wf('wType').value = wf('bankType').value;
+  }
+  wf('wVatRow').hidden = !wf('wVat').checked;
+  wf('welcomeSample').hidden = !firstRun; // a sample would replace an invoice being worked on
+  welcomeEl.hidden = false;
+  if (!firstRun) { if (welcomeEl.scrollIntoView) welcomeEl.scrollIntoView({ block: 'start' }); wf('wName').focus(); }
+}
+
+function closeWelcome() {
+  store(ONBOARD_KEY, '1');
+  welcomeEl.hidden = true;
+}
+
+// Copies the card's answers onto the sheet. Blank answers leave the sheet as it is.
+function applyWelcome() {
+  const set = (id, value) => { const v = String(value || '').trim(); if (v) wf(id).value = v; };
+  set('fromName', wf('wName').value);
+  let details = wf('wDetails').value.trim();
+  const vatNo = wf('wVatNo').value.trim();
+  if (wf('wVat').checked && vatNo && !hasVatNumber(details)) details += `${details ? '\n' : ''}VAT No. ${vatNo}`;
+  set('fromDetails', details);
+  autosize(wf('fromDetails'));
+  wf('vatToggle').checked = wf('wVat').checked;
+  set('bankName', wf('wBank').value);
+  set('bankHolder', wf('wHolder').value);
+  set('bankAccount', wf('wAccount').value);
+  set('bankBranch', wf('wBranch').value);
+  set('bankType', wf('wType').value);
+  recalc();
+  save();
+}
+
+// An unsaved example invoice, so the first thing a new user sees is a finished-looking document.
+function loadSample() {
+  applyData({
+    ...collectData(),
+    docType: 'invoice', invNumber: nextFreeNumber(getSavedList(), 'invoice', ''), invDate: localISODate(new Date()), dueDate: '',
+    toName: 'Sample Client (Pty) Ltd', toDetails: '12 Example Street\nCape Town\nclient@example.com', toEmail: '',
+    notes: 'This is a sample. Change anything you like, then press Save to keep it.',
+    paid: false, discountValue: '', quoteStatus: '', payments: [], creditFor: '', creditReason: '', repeat: '', lastRepeated: '',
+    items: [
+      { desc: 'Logo design', qty: 1, unit: '', price: 3500, vatCat: 'standard' },
+      { desc: 'Website, 5 pages', qty: 5, unit: 'pages', price: 1200, vatCat: 'standard' },
+    ],
+  });
+  applyDueDate();
+  setOpenInvoice('');
+  save();
+}
+
+wf('wVat').addEventListener('change', () => { wf('wVatRow').hidden = !wf('wVat').checked; });
+wf('wVatNo').addEventListener('input', () => {
+  const v = wf('wVatNo').value.trim();
+  wf('wVatMsg').textContent = v && !hasVatNumber(v) ? 'A South African VAT number has 10 digits and starts with 4. Check it, or carry on and fix it later.' : '';
+});
+wf('welcomeForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  applyWelcome();
+  closeWelcome();
+  document.getElementById('saveStatus').textContent = 'Business details added. They stay for every new document.';
+  wf('toName').focus();
+});
+wf('welcomeSample').addEventListener('click', () => { applyWelcome(); loadSample(); closeWelcome(); });
+wf('welcomeSkip').addEventListener('click', closeWelcome);
+document.getElementById('setupBtn').addEventListener('click', () => openWelcome(false));
+
 // --- Start. In IndexedDB mode the saved list is read from the database first; until then the page is inert, so an
 // early click can't save over documents that haven't loaded. localStorage mode has nothing to wait for.
 const appEl = document.querySelector('.app');
@@ -1152,6 +1235,7 @@ function start() {
   if (logo) showLogo(logo);
   refreshInvoiceList();
   recalc();
+  if (!load(ONBOARD_KEY) && !Object.keys(getSavedList()).length && !wf('fromName').value.trim() && !wf('fromDetails').value.trim()) openWelcome(true);
   appEl.inert = false;
   if (folderSync) folderSync.resume().then(docs => { if (docs) mergeFromFolder(docs, false); }).catch(() => {});
 }

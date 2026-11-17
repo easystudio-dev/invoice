@@ -8,9 +8,12 @@ Make invoices, quotes and credit notes in the browser. Built for South African f
 - EFT details, an online payment link and a QR code on the printed invoice
 - Download PDF via the browser's print dialog
 - Export a CSV for Zoho Books' invoice import, and back up or restore everything as JSON
+- First-run setup card (business details, VAT, bank details, a sample invoice), reopened from "Setup guide"
 - Optional: save every document as a file in a folder you choose (Chrome, Edge, Opera on desktop), one subfolder per client, e.g. `Invoices/Acme Ltd/INV-0001.json`. Put the folder inside Dropbox, Google Drive or OneDrive to sync it between computers
 
 Clearing your browser data deletes saved invoices. The app asks the browser to keep its storage and reminds you to **Export backup** (or connect a folder) when a backup is due.
+
+Privacy: see [privacy.html](privacy.html) for what is stored where and what leaves the device. The test suite checks that the app code makes no network requests and loads nothing from other sites, so keep that page true when you change the app.
 
 ## Run
 

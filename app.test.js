@@ -1456,3 +1456,158 @@ test('restoring a backup brings back a document that was deleted', async () => {
   assert.deepStrictEqual(Object.keys(saved()), ['INV-0003']);
   assert.strictEqual(deletedAt(dir, 'INV-0003'), undefined);
 });
+
+// --- First-run setup and privacy ---
+const fillWelcome = ($, type, v = {}) => {
+  type('#wName', v.name ?? 'Studio One');
+  type('#wDetails', v.details ?? '1 Main Rd\nCape Town');
+  if (v.vat) { type('#wVat', true); type('#wVatNo', v.vatNo ?? '4123456789'); }
+  type('#wBank', v.bank ?? 'FNB');
+  type('#wHolder', 'Studio One');
+  type('#wAccount', '62012345678');
+  type('#wBranch', '250655');
+  type('#wType', 'cheque');
+};
+const submitWelcome = (w, $) => $('#welcomeForm').dispatchEvent(new w.Event('submit', { cancelable: true, bubbles: true }));
+
+test('setup card shows for a brand-new user only', async () => {
+  assert.strictEqual(boot().$('#welcome').hidden, false);
+  assert.strictEqual(boot({ seed: { 'invoice-list': { 'INV-0001': inv('INV-0001') } } }).$('#welcome').hidden, true);
+  assert.strictEqual(boot({ seed: { 'invoice-onboarded': '1' } }).$('#welcome').hidden, true);
+  assert.strictEqual(boot({ seed: { 'invoice-draft': { fromName: 'Already Set Up' } } }).$('#welcome').hidden, true);
+  const idb = boot({ idb: newIdb() });
+  await idb.ready();
+  assert.strictEqual(idb.$('#welcome').hidden, false);
+});
+
+test('setup card waits for the saved list with IndexedDB, so an existing user never sees it', async () => {
+  const idb = newIdb();
+  const first = createStorage({ indexedDB: idb, ls: { get: () => null, set: () => true, remove() {} } });
+  await first.load();
+  first.setList(JSON.stringify({ 'INV-0001': inv('INV-0001') }), true);
+  await first.flush();
+  const b = boot({ idb });
+  await b.ready();
+  assert.strictEqual(b.$('#welcome').hidden, true);
+});
+
+test('Save and start puts the answers on the sheet, keeps them for new invoices and remembers it was done', () => {
+  const { $, w, type, saved } = boot();
+  fillWelcome($, type, { vat: true });
+  submitWelcome(w, $);
+  assert.strictEqual($('#welcome').hidden, true);
+  assert.strictEqual($('#fromName').value, 'Studio One');
+  assert.strictEqual($('#fromDetails').value, '1 Main Rd\nCape Town\nVAT No. 4123456789');
+  assert.strictEqual($('#vatToggle').checked, true);
+  assert.strictEqual($('.doc-title').textContent, 'TAX INVOICE');
+  assert.deepStrictEqual([$('#bankName').value, $('#bankHolder').value, $('#bankAccount').value, $('#bankBranch').value, $('#bankType').value], ['FNB', 'Studio One', '62012345678', '250655', 'cheque']);
+  assert.strictEqual(w.localStorage.getItem('invoice-onboarded'), '1');
+  assert.strictEqual(JSON.parse(w.localStorage.getItem('invoice-draft')).fromName, 'Studio One');
+  $('#newInvoiceBtn').click();
+  assert.strictEqual($('#fromName').value, 'Studio One');
+  assert.strictEqual($('#bankName').value, 'FNB');
+  const b = boot({ seed: { 'invoice-draft': JSON.parse(w.localStorage.getItem('invoice-draft')), 'invoice-onboarded': '1' } });
+  assert.strictEqual(b.$('#welcome').hidden, true);
+  assert.deepStrictEqual(saved(), {}); // setup doesn't save a document
+});
+
+test('VAT number: a bad one gets a hint but is not refused; one already in the details is not added twice; blank VAT adds nothing', () => {
+  const { $, w, type } = boot();
+  type('#wVat', true);
+  type('#wVatNo', '12345');
+  assert.match($('#wVatMsg').textContent, /10 digits and starts with 4/);
+  type('#wVatNo', '4123456789');
+  assert.strictEqual($('#wVatMsg').textContent, '');
+  type('#wDetails', 'VAT 4123456789\n1 Road');
+  submitWelcome(w, $);
+  assert.strictEqual($('#fromDetails').value, 'VAT 4123456789\n1 Road');
+
+  const b = boot();
+  b.type('#wName', 'Me');
+  submitWelcome(b.w, b.$);
+  assert.strictEqual(b.$('#fromDetails').value, '');
+  assert.strictEqual(b.$('#vatToggle').checked, false);
+});
+
+test('the VAT number field appears only when registered for VAT', () => {
+  const { $, type } = boot();
+  assert.strictEqual($('#wVatRow').hidden, true);
+  type('#wVat', true);
+  assert.strictEqual($('#wVatRow').hidden, false);
+  type('#wVat', false);
+  assert.strictEqual($('#wVatRow').hidden, true);
+});
+
+test('Skip closes the card, changes nothing and is remembered', () => {
+  const { $, type, w } = boot();
+  type('#wName', 'Typed but skipped');
+  $('#welcomeSkip').click();
+  assert.strictEqual($('#welcome').hidden, true);
+  assert.strictEqual($('#fromName').value, '');
+  assert.strictEqual(w.localStorage.getItem('invoice-onboarded'), '1');
+});
+
+test('Try a sample invoice fills a finished-looking invoice with their details, without saving it', () => {
+  const { $, d, type, saved, w } = boot();
+  type('#wName', 'Studio One');
+  $('#welcomeSample').click();
+  assert.strictEqual($('#welcome').hidden, true);
+  assert.strictEqual($('#fromName').value, 'Studio One');
+  assert.strictEqual($('#toName').value, 'Sample Client (Pty) Ltd');
+  assert.strictEqual(d.querySelectorAll('#itemsBody tr').length, 2);
+  assert.match($('#grandTotal').textContent.replace(/\s/g, ''), /9500/);
+  assert.match($('#notes').value, /sample/i);
+  assert.ok($('#dueDate').value);
+  assert.deepStrictEqual(saved(), {});
+  $('#saveInvoiceBtn').click();
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0001']);
+  assert.strictEqual(w.localStorage.getItem('invoice-onboarded'), '1');
+});
+
+test('Setup guide reopens the card with the current details, without the sample button, and does not touch the invoice until saved', () => {
+  const { $, type, w } = boot({ seed: { 'invoice-onboarded': '1', 'invoice-draft': { fromName: 'Studio One', bankName: 'FNB', vatToggle: true } } });
+  assert.strictEqual($('#welcome').hidden, true);
+  $('#setupBtn').click();
+  assert.strictEqual($('#welcome').hidden, false);
+  assert.strictEqual($('#wName').value, 'Studio One');
+  assert.strictEqual($('#wBank').value, 'FNB');
+  assert.strictEqual($('#wVat').checked, true);
+  assert.strictEqual($('#welcomeSample').hidden, true);
+  type('#wName', 'Renamed');
+  assert.strictEqual($('#fromName').value, 'Studio One');
+  submitWelcome(w, $);
+  assert.strictEqual($('#fromName').value, 'Renamed');
+  assert.strictEqual($('#bankName').value, 'FNB');
+});
+
+test('the setup card is screen-only and every field has a label', () => {
+  const { $, d } = boot();
+  assert.ok($('#welcome').classList.contains('no-print'));
+  d.querySelectorAll('#welcome input, #welcome select, #welcome textarea').forEach(el => {
+    assert.ok(d.querySelector(`label[for="${el.id}"]`) || el.closest('label'), `${el.id} has no label`);
+  });
+});
+
+test('privacy page: linked from the app, offline-cached, backlinks to the app, loads nothing from other sites', () => {
+  const fs = require('fs');
+  const { d } = boot();
+  assert.ok([...d.querySelectorAll('a')].some(a => a.getAttribute('href') === 'privacy.html'));
+  assert.ok(d.querySelector('#welcome a[href="privacy.html"]'));
+  assert.match(fs.readFileSync('sw.js', 'utf8'), /'privacy\.html'/);
+  const privacy = fs.readFileSync('privacy.html', 'utf8');
+  assert.match(privacy, /href="\.\/"/);
+  assert.match(privacy, /<h1>Privacy<\/h1>/);
+  // The page promises nothing is loaded from third parties; make that checkable.
+  for (const file of ['index.html', 'privacy.html', 'style.css']) {
+    const text = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(text, /<(script|img|iframe|link|source)\b[^>]*\b(src|href)="(https?:)?\/\//i, `${file} loads something from another site`);
+    assert.doesNotMatch(text, /url\(\s*['"]?(https?:)?\/\//i, `${file} loads something from another site in CSS`);
+  }
+});
+
+test('the app code makes no network requests of its own', () => {
+  const fs = require('fs');
+  for (const file of ['app.js', 'lib.js', 'storage.js', 'folder.js']) {
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\bfetch\s*\(|XMLHttpRequest|sendBeacon|new WebSocket|new EventSource/, `${file} makes a network request`);
+  }
+});
