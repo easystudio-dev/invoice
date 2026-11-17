@@ -8,9 +8,10 @@ const html = read('index.html').replace(/<script[\s\S]*?<\/script>/g, '');
 
 // seed: localStorage entries set before the app starts. confirm: answer for confirm() dialogs.
 // folder: a fakeDir() the folder picker will hand back (Chromium's showDirectoryPicker).
-function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false, folder = null } = {}) {
+function boot({ seed = {}, blockStorage = false, confirm = true, narrow = false, folder = null, userAgent = null } = {}) {
   const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only' });
   const w = dom.window;
+  if (userAgent) Object.defineProperty(w.navigator, 'userAgent', { value: userAgent });
   w.matchMedia = () => ({ matches: narrow, addEventListener() {} });
   w.alerts = [];
   w.alert = msg => w.alerts.push(msg);

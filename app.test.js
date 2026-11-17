@@ -1144,3 +1144,47 @@ test('differing copies: OK takes the folder’s, Cancel keeps this browser’s',
     assert.strictEqual(JSON.parse(dir.files()['X/INV-0003.json']).notes, expected);
   }
 });
+
+// --- Install button ---
+test('install button appears when the browser offers install, prompts once, and hides afterwards', async () => {
+  const { w, $ } = boot();
+  assert.strictEqual($('#installBtn').hidden, true);
+  let prompted = 0;
+  const ev = new w.Event('beforeinstallprompt', { cancelable: true });
+  ev.prompt = async () => { prompted++; };
+  w.dispatchEvent(ev);
+  assert.strictEqual(ev.defaultPrevented, true);
+  assert.strictEqual($('#installBtn').hidden, false);
+  $('#installBtn').click();
+  await tick(10);
+  assert.strictEqual(prompted, 1);
+  assert.strictEqual($('#installBtn').hidden, true);
+});
+
+test('install button hides after the app is installed', () => {
+  const { w, $ } = boot();
+  const ev = new w.Event('beforeinstallprompt', { cancelable: true });
+  ev.prompt = async () => {};
+  w.dispatchEvent(ev);
+  w.dispatchEvent(new w.Event('appinstalled'));
+  assert.strictEqual($('#installBtn').hidden, true);
+});
+
+test('install button is not offered inside an installed app window', () => {
+  const { w, $ } = boot({ narrow: true }); // the test stub answers every media query the same way
+  w.dispatchEvent(new w.Event('beforeinstallprompt', { cancelable: true }));
+  assert.strictEqual($('#installBtn').hidden, true);
+});
+
+test('on iOS the install button shows the Add to Home Screen steps', () => {
+  const { $ } = boot({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1' });
+  assert.strictEqual($('#installBtn').hidden, false);
+  assert.strictEqual($('#installHelp').hidden, true);
+  $('#installBtn').click();
+  assert.strictEqual($('#installHelp').hidden, false);
+});
+
+test('no fonts are requested from Google', () => {
+  const fs = require('fs');
+  for (const f of ['index.html', 'style.css', 'sw.js']) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /fonts\.(googleapis|gstatic)\.com/);
+});

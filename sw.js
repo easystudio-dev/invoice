@@ -1,7 +1,7 @@
 // Offline support. Network first, so a new deploy shows up on the next load;
 // the cache is only the fallback when there's no connection.
-const CACHE = 'invoice-v3';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'lib.js', 'folder.js', 'vendor/qrcode.js', 'favicon.svg', 'manifest.webmanifest'];
+const CACHE = 'invoice-v4';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'lib.js', 'folder.js', 'vendor/qrcode.js', 'fonts/anton-latin.woff2', 'fonts/anton-latin-ext.woff2', 'fonts/instrument-sans-latin.woff2', 'fonts/instrument-sans-latin-ext.woff2', 'favicon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
@@ -18,8 +18,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        // opaque = cross-origin (Google Fonts) — still worth keeping for offline use
-        if (res.ok || res.type === 'opaque') {
+        if (res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(e.request, copy));
         }

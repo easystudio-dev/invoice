@@ -9,9 +9,7 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preload" href="fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script>
   var t;
@@ -297,6 +295,7 @@
       <button id="exportBtn" type="button" class="btn btn-quiet" title="Download all saved invoices as a backup file">Export backup</button>
       <button id="importBtn" type="button" class="btn btn-quiet" title="Restore saved invoices from a backup file">Import backup</button>
       <button id="zohoBtn" type="button" class="btn btn-quiet" title="Download the listed invoices as a CSV for Zoho Books’ invoice import">Export for Zoho Books</button>
+      <button id="installBtn" type="button" class="btn btn-quiet" hidden title="Install this app on your device">Install app</button>
       <button id="folderBtn" type="button" class="btn btn-quiet" hidden title="Also save every invoice as a file in a folder you choose">Save to folder…</button>
       <input id="importInput" type="file" accept="application/json,.json" class="visually-hidden" tabindex="-1" aria-hidden="true">
       <button id="themeToggle" type="button" class="btn btn-quiet icon-btn" aria-label="Dark mode" aria-pressed="false" title="Toggle dark mode">
@@ -321,6 +320,7 @@
       </ol>
       <p>Invoices come in as drafts. Payments and credit notes aren’t included. If VAT is on, Zoho needs a tax named “VAT” set up (it can’t be used if your organisation isn’t VAT-registered).</p>
     </div>
+    <p id="installHelp" class="footnote" role="status" hidden>To install: tap the Share button, then “Add to Home Screen”.</p>
     <p id="folderStatus" class="footnote" role="status"></p>
     <p class="footnote">Everything stays in this browser — no account, nothing uploaded. Clearing your browser data deletes your invoices, so export a backup now and then.</p>
     <p class="footnote">Made by <a href="https://www.easystudio.co.za" target="_blank" rel="noopener">EasyStudio</a></p>

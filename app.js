@@ -1043,5 +1043,25 @@ if (typeof createFolderSync === 'function' && window.showDirectoryPicker && wind
   });
 }
 
+// --- Install button. Chromium fires beforeinstallprompt when the app can be installed; iOS has no such event,
+// so there the button just explains Share → Add to Home Screen. Hidden once installed (standalone window).
+const installBtn = document.getElementById('installBtn');
+const installHelp = document.getElementById('installHelp');
+let installEvent = null;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInstalled = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if (!isInstalled && location.protocol.startsWith('http')) {
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; installBtn.hidden = false; });
+  window.addEventListener('appinstalled', () => { installEvent = null; installBtn.hidden = true; installHelp.hidden = true; });
+  if (isIOS) installBtn.hidden = false;
+}
+installBtn.addEventListener('click', async () => {
+  if (!installEvent) { installHelp.hidden = !installHelp.hidden; return; }
+  const e = installEvent;
+  installEvent = null; // a prompt can be shown once per event
+  installBtn.hidden = true;
+  try { await e.prompt(); } catch { /* already used or blocked */ }
+});
+
 // Offline + installable. Service workers need http(s), so opening index.html as a file skips this.
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js');
