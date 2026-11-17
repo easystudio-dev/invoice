@@ -1770,3 +1770,28 @@ test('an unknown or empty ?new value changes nothing but is still removed from t
   const { w } = boot({ url: 'http://localhost/?other=1&new=quote#top', seed: { 'invoice-onboarded': '1' } });
   assert.strictEqual(w.location.hash, '#top');
 });
+
+test('setup card fields are drawn as visible boxes and the checkbox is not stretched', () => {
+  const css = require('fs').readFileSync('style.css', 'utf8');
+  // The global input rule makes fields borderless and transparent (right for the paper, wrong for a form).
+  const rule = css.match(/\.welcome-grid input:not\(\[type=checkbox\]\)[^{]*\{([^}]*)\}/);
+  assert.ok(rule, 'no field rule for the setup card');
+  assert.match(rule[1], /border:\s*1px solid var\(--field-edge-ui\)/);
+  assert.match(rule[1], /background:\s*var\(--field-bg\)/);
+  assert.match(css, /\.welcome-check input\s*\{[^}]*width:\s*auto/);
+});
+
+test('control outlines and field backgrounds off the paper keep 3:1 contrast in both themes', () => {
+  const css = require('fs').readFileSync('style.css', 'utf8');
+  const block = sel => Object.fromEntries([...css.slice(css.indexOf(sel)).split('}')[0].matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map(m => [m[1], m[2]]));
+  const light = block(':root {');
+  const dark = { ...light, ...block(':root[data-theme="dark"] {') };
+  const lum = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  for (const [theme, t] of [['light', light], ['dark', dark]]) {
+    assert.ok(t['field-edge-ui'] && t['field-bg'], `${theme}: tokens missing`);
+    assert.ok(ratio(t['field-edge-ui'], t['field-bg']) >= 3, `${theme}: outline on field`);
+    assert.ok(ratio(t['field-edge-ui'], t.surface) >= 3, `${theme}: outline on card`);
+    assert.ok(ratio(t.ink, t['field-bg']) >= 4.5, `${theme}: text in field`);
+  }
+});

@@ -47,11 +47,15 @@
   --overdue: #b8322a;
   --part: #8a5200;
   --credit: #6b3fa0;
+  --field-edge-ui: #828a80; /* control outlines off the paper: 3:1 on the field and on the card behind it */
+  --field-bg: #ffffff;
   --font: 'Instrument Sans', system-ui, sans-serif;
   --font-stamp: 'Anton', Impact, 'Arial Narrow', sans-serif;
 }
 
 :root[data-theme="dark"] {
+  --field-edge-ui: #7d867f;
+  --field-bg: #171b19;
   --desk: #171b19;
   --rail: #1e2320;
   --ink: #e4e8e2;
@@ -645,9 +649,17 @@ table.items { width: 100%; border-collapse: collapse; margin-top: 16px; }
 .welcome-lead a { color: inherit; }
 .welcome-grid { display: grid; grid-template-columns: minmax(110px, 160px) 1fr; gap: 8px 12px; align-items: start; }
 .welcome-grid label { font-size: 13px; padding-top: 7px; }
-.welcome-grid input:not([type=checkbox]), .welcome-grid textarea, .welcome-grid select { width: 100%; min-width: 0; font: inherit; }
+/* The global input rule is for the borderless inline fields on the paper; here every field needs a visible box. */
+.welcome-grid input:not([type=checkbox]), .welcome-grid textarea, .welcome-grid select {
+  width: 100%; min-width: 0; min-height: 36px; padding: 6px 10px; font: inherit; color: var(--ink);
+  background: var(--field-bg); border: 1px solid var(--field-edge-ui); border-radius: 6px;
+}
+.welcome-grid textarea { min-height: 76px; }
+.welcome-grid input:hover, .welcome-grid textarea:hover { background: var(--field-bg); border-color: var(--ink); }
+.welcome-grid input:focus-visible, .welcome-grid textarea:focus-visible, .welcome-grid select:focus-visible { background: var(--field-bg); }
+.welcome-check input { width: auto; margin: 0 8px 0 0; vertical-align: middle; }
 .welcome-check { grid-column: 2; font-size: 13px; }
-.welcome-check label { padding: 0; }
+.welcome-check label { display: inline-flex; align-items: center; padding: 4px 0; cursor: pointer; }
 .welcome-vat { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; gap: 4px 12px; }
 .welcome-vat .welcome-msg { grid-column: 2; }
 .welcome-msg { margin: 0; min-height: 1em; font-size: 12px; color: var(--overdue); }
