@@ -643,7 +643,7 @@ test('paymentLink: a hostile value cannot change the scheme or host', () => {
   assert.strictEqual(link('https://x.co/{number}', { number: '../..//evil.com' }), 'https://x.co/..%2F..%2F%2Fevil.com');
 });
 
-const { cleanFileName, safeFolderName, folderPlan, diffPlan, parseFolderDoc, mergeLists, stampChanges } = require('./lib.js');
+const { cleanFileName, safeFolderName, folderPlan, diffPlan, parseFolderDoc, parseTombstone, mergeLists, mergeSync, pruneDeleted, stampChanges, DELETION_KEEP_MS } = require('./lib.js');
 
 test('safeFolderName: strips what Windows forbids and falls back to "No client"', () => {
   assert.strictEqual(safeFolderName('Acme / Sons: "Ltd"?'), 'Acme Sons Ltd');
@@ -790,4 +790,51 @@ test('makeBackup round-trips through parseBackup', () => {
   const b = makeBackup({ A: { invNumber: 'A' } }, null, new Date('2026-11-17T10:00:00Z'));
   assert.deepStrictEqual([b.app, b.version, b.exported], ['invoice', BACKUP_VERSION, '2026-11-17T10:00:00.000Z']);
   assert.deepStrictEqual(parseBackup(JSON.stringify(b)).invoices, { A: { invNumber: 'A' } });
+});
+
+test('folderPlan: deletion records go in _deleted/, one per number, and no client can use that folder', () => {
+  const plan = folderPlan({ A: { toName: '_DELETED' } }, { B: 500, ['C/1']: 600, bad: 'x', neg: -1 });
+  assert.deepStrictEqual(Object.keys(plan).sort(), ['_DELETED (client)/A.json', '_deleted/B.json', '_deleted/C 1.json'].sort());
+  assert.deepStrictEqual(JSON.parse(plan['_deleted/B.json']), { invNumber: 'B', deletedAt: 500 });
+  assert.strictEqual(safeFolderName('_deleted'), '_deleted (client)');
+});
+
+test('parseTombstone: reads a deletion record, rejects everything else', () => {
+  assert.deepStrictEqual(parseTombstone('{"invNumber":" INV-1 ","deletedAt":5}'), ['INV-1', 5]);
+  for (const bad of ['nope', '[]', '{}', '{"invNumber":"A"}', '{"invNumber":"A","deletedAt":"5"}', '{"invNumber":"A","deletedAt":0}',
+    '{"invNumber":"","deletedAt":5}', '{"invNumber":"__proto__","deletedAt":5}', 'null']) assert.strictEqual(parseTombstone(bad), null, bad);
+});
+
+test('pruneDeleted: keeps recent records, drops old and malformed ones', () => {
+  const now = 1e12;
+  assert.deepStrictEqual(pruneDeleted({ A: now - 1000, B: now - DELETION_KEEP_MS, C: now - DELETION_KEEP_MS - 1, D: 'x', ['__proto__']: now }, now), { A: now - 1000, B: now - DELETION_KEEP_MS });
+  assert.deepStrictEqual(pruneDeleted(null, now), {});
+});
+
+test('mergeSync: a deletion removes a document not edited since; a later edit beats the deletion', () => {
+  const base = 1e12;
+  const now = base + 1000;
+  const local = { A: { n: 1, updatedAt: base + 100 }, B: { n: 2, updatedAt: base + 900 }, C: { n: 3 }, D: { n: 4, updatedAt: base + 100 } };
+  const folder = { D: { n: 4, updatedAt: base + 100 }, E: { n: 5, updatedAt: base + 50 } };
+  const m = mergeSync(local, {}, folder, { A: base + 500, B: base + 800, C: base + 10, E: base + 60, Z: base + 5 }, 'local', now);
+  assert.deepStrictEqual(Object.keys(m.merged), ['B', 'D']);
+  assert.deepStrictEqual(m.removed, ['A', 'C', 'E']);
+  assert.deepStrictEqual(m.imported, []); // E came from the folder but was deleted
+  assert.deepStrictEqual(m.deleted, { A: base + 500, C: base + 10, E: base + 60, Z: base + 5 }); // B's record is forgotten
+  assert.deepStrictEqual(local.A, { n: 1, updatedAt: base + 100 }); // inputs not changed
+});
+
+test('mergeSync: this browser\'s records apply to the folder\'s documents too, and the latest record per number wins', () => {
+  const base = 1e12;
+  const m = mergeSync({}, { E: base + 100, F: base + 100 }, { E: { n: 5, updatedAt: base + 50 }, F: { n: 6, updatedAt: base + 500 } }, { E: base + 20 }, 'local', base + 1000);
+  assert.deepStrictEqual(Object.keys(m.merged), ['F']); // F was edited after its deletion
+  assert.deepStrictEqual(m.deleted, { E: base + 100 });
+  assert.deepStrictEqual(m.removed, ['E']);
+});
+
+test('mergeSync: a conflict on a deleted document is not a conflict; old records are pruned', () => {
+  const base = 1e12;
+  const m = mergeSync({ A: { n: 1 } }, {}, { A: { n: 2 } }, { A: base, OLD: base - DELETION_KEEP_MS - 1 }, 'folder', base + 10);
+  assert.deepStrictEqual([m.merged, m.conflicts, m.replaced, m.removed], [{}, [], [], ['A']]);
+  assert.deepStrictEqual(m.deleted, { A: base });
 });

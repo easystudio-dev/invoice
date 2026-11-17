@@ -358,6 +358,7 @@ function paymentLink(template, { amount, number, currency } = {}) {
 // --- Saving to a folder: one JSON file per document, inside one subfolder per client ---
 
 const NO_CLIENT_FOLDER = 'No client';
+var DELETED_FOLDER = '_deleted'; // holds one small file per deleted document; no client folder may use this name
 
 // A name that is safe as a file or folder name on Windows, macOS and Linux, or '' when nothing usable is left.
 // Strips the characters Windows forbids and control characters, trailing dots/spaces, leading dots, and
@@ -370,24 +371,32 @@ function cleanFileName(name) {
 }
 
 function safeFolderName(name) {
-  return cleanFileName(name) || NO_CLIENT_FOLDER;
+  const s = cleanFileName(name) || NO_CLIENT_FOLDER;
+  return s.toLowerCase() === DELETED_FOLDER ? `${s} (client)` : s;
 }
 
 // { 'Client/INV-0001.json': text } for every saved document: where each one goes and what the file holds.
-// Two documents that would land on the same path (case-insensitively, as Windows and macOS see it) get " (2)" etc.
-function folderPlan(list) {
+// `deleted` ({ number: deletedAt }) adds one '_deleted/<number>.json' record per deleted document, so a deletion
+// reaches the other computers that share the folder. Two files that would land on the same path (compared
+// case-insensitively, as Windows and macOS do) get " (2)" etc.
+function folderPlan(list, deleted) {
   const plan = {};
   const taken = new Set();
-  Object.keys(list || {}).sort().forEach(num => {
-    const doc = list[num];
-    if (!doc || typeof doc !== 'object') return;
-    const dir = safeFolderName(doc.toName);
+  const place = (dir, num, text) => {
     const base = cleanFileName(num) || 'document';
     let name = base;
     for (let n = 2; taken.has(`${dir}/${name}.json`.toLowerCase()); n++) name = `${base} (${n})`;
     const path = `${dir}/${name}.json`;
     taken.add(path.toLowerCase());
-    plan[path] = JSON.stringify(doc, null, 2);
+    plan[path] = text;
+  };
+  Object.keys(list || {}).sort().forEach(num => {
+    const doc = list[num];
+    if (doc && typeof doc === 'object') place(safeFolderName(doc.toName), num, JSON.stringify(doc, null, 2));
+  });
+  Object.keys(deleted || {}).sort().forEach(num => {
+    const at = deleted[num];
+    if (typeof at === 'number' && Number.isFinite(at) && at > 0) place(DELETED_FOLDER, num, JSON.stringify({ invNumber: num, deletedAt: at }, null, 2));
   });
   return plan;
 }
@@ -409,6 +418,15 @@ function parseFolderDoc(text, stem) {
   const num = (typeof doc.invNumber === 'string' ? doc.invNumber.trim() : '') || String(stem || '').trim();
   if (!num || ['__proto__', 'constructor', 'prototype'].includes(num)) return null;
   return [num, doc];
+}
+
+// [number, deletedAt] from a deletion record's text, or null when it isn't one.
+function parseTombstone(text) {
+  const rec = safeParse(text, null);
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+  const num = typeof rec.invNumber === 'string' ? rec.invNumber.trim() : '';
+  if (!num || ['__proto__', 'constructor', 'prototype'].includes(num)) return null;
+  return typeof rec.deletedAt === 'number' && Number.isFinite(rec.deletedAt) && rec.deletedAt > 0 ? [num, rec.deletedAt] : null;
 }
 
 // --- Edit times ---
@@ -437,7 +455,7 @@ function stampChanges(prev, next, now, keep) {
   return out;
 }
 
-const editTime = doc => (doc && typeof doc.updatedAt === 'number' ? doc.updatedAt : 0);
+function editTime(doc) { return doc && typeof doc.updatedAt === 'number' ? doc.updatedAt : 0; }
 
 // Combines this browser's saved list with the documents found in a folder. A document in only one place is kept.
 // When both have a number but different contents, the newer `updatedAt` wins. When neither is newer (the same
@@ -461,6 +479,43 @@ function mergeLists(local, folder, ties) {
     if (ties === 'folder') { merged[num] = folder[num]; replaced.push(num); }
   });
   return { merged, imported, replaced, conflicts };
+}
+
+// --- Deleted documents ---
+// A deletion is remembered as { number: deletedAt } so it can reach the other computers sharing a folder; without
+// it the document would just be copied back from the computer that still has it. A document with a later `updatedAt`
+// than the deletion (the number was reused, or it was edited after) beats the record. Records are dropped after
+// 180 days: a computer that has been away longer than that may bring a deleted document back.
+const DELETION_KEEP_MS = 180 * 86400000;
+
+function pruneDeleted(deleted, now) {
+  const out = {};
+  Object.keys(deleted || {}).forEach(num => {
+    const at = deleted[num];
+    if (!UNSAFE_KEYS.includes(num) && typeof at === 'number' && Number.isFinite(at) && now - at <= DELETION_KEEP_MS) out[num] = at;
+  });
+  return out;
+}
+
+// mergeLists plus deletions: records from both sides are combined (latest per number); a document whose edit time
+// is not after its deletion is dropped, and a record that a later edit beats is forgotten. Returns everything
+// mergeLists does, plus `deleted` (the combined records) and `removed` (numbers dropped from the merged list).
+function mergeSync(local, localDeleted, folder, folderDeleted, ties, now) {
+  const m = mergeLists(local, folder, ties);
+  const deleted = {};
+  [localDeleted, folderDeleted].forEach(side => Object.keys(side || {}).forEach(num => {
+    if (!UNSAFE_KEYS.includes(num) && typeof side[num] === 'number') deleted[num] = Math.max(deleted[num] || 0, side[num]);
+  }));
+  const removed = [];
+  Object.keys(m.merged).forEach(num => {
+    if (!Object.prototype.hasOwnProperty.call(deleted, num)) return;
+    if (editTime(m.merged[num]) > deleted[num]) delete deleted[num];
+    else { delete m.merged[num]; removed.push(num); }
+  });
+  const gone = new Set(removed);
+  const keep = nums => nums.filter(n => !gone.has(n));
+  return { merged: m.merged, imported: keep(m.imported), replaced: keep(m.replaced), conflicts: keep(m.conflicts),
+    deleted: pruneDeleted(deleted, now), removed };
 }
 
 // --- SARS tax-invoice advisory ---
@@ -531,4 +586,4 @@ function parseBackup(text) {
   return { invoices, logo: typeof data.logo === 'string' ? data.logo : null };
 }
 
-if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, mergeLists, stampChanges, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };
+if (typeof module === 'object') module.exports = { hasVatNumber, taxInvoiceIssues, FULL_TAX_INVOICE_FROM, BACKUP_VERSION, makeBackup, backupNudge, parseBackup, cleanFileName, safeFolderName, NO_CLIENT_FOLDER, folderPlan, diffPlan, parseFolderDoc, parseTombstone, mergeLists, mergeSync, pruneDeleted, DELETED_FOLDER, DELETION_KEEP_MS, editTime, stampChanges, localISODate, addDays, safeParse, round2, vatCategory, invoiceTotals, nextInvoiceNumber, nextNumberAfter, nextFreeNumber, paymentsTotal, balanceDue, savedTotal, creditsTotal, creditRemaining, invoiceStatus, ledgerEntry, ledgerTotals, ledgerMatches, addMonths, nextRepeatDate, dueRepeats, csvEscape, toCSV, csvNumber, zohoItemText, zohoInvoiceRows, ZOHO_INVOICE_HEADERS, eftRows, EFT_ACCOUNT_TYPES, paymentLink };

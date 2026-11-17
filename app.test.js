@@ -1117,8 +1117,8 @@ test('connecting a folder loads its documents, writes ours, and then follows eve
   [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0003')).click();
   $('#deleteInvoiceBtn').click();
   await tick(400);
-  assert.deepStrictEqual(Object.keys(dir.files()), ['Acme/INV-0100.json']);
-  assert.deepStrictEqual(dir.folders(), ['Acme']);
+  assert.deepStrictEqual(Object.keys(dir.files()).sort(), ['Acme/INV-0100.json', '_deleted/INV-0003.json']); // the deletion is recorded
+  assert.deepStrictEqual(dir.folders(), ['Acme', '_deleted']);
 });
 
 test('pressing the folder button while connected can stop saving to it', async () => {
@@ -1372,4 +1372,87 @@ test('folder merge: the newer copy wins without asking; a backup import keeps it
   assert.strictEqual(saved()['INV-0001'].updatedAt, 2000);
   assert.strictEqual(saved()['INV-0002'].notes, 'local newer');
   assert.strictEqual(JSON.parse(dir.files()['X/INV-0002.json']).notes, 'local newer');
+});
+
+// --- Deletion records ---
+const deletedAt = (dir, num) => (dir.files()[`_deleted/${num}.json`] ? JSON.parse(dir.files()[`_deleted/${num}.json`]).deletedAt : undefined);
+
+test('a document deleted on another computer is removed here when the folder connects, after asking', async () => {
+  const base = Date.now();
+  const dir = fakeDir();
+  dir.put('_deleted/INV-0003.json', JSON.stringify({ invNumber: 'INV-0003', deletedAt: base }));
+  const seed = { 'invoice-list': { 'INV-0003': { ...inv('INV-0003'), updatedAt: base - 1000 }, 'INV-0004': { ...inv('INV-0004'), updatedAt: base - 1000 } } };
+  const { $, w, saved } = boot({ folder: dir, seed });
+  const asked = [];
+  w.confirm = m => { asked.push(m); return true; };
+  $('#folderBtn').click();
+  await tick(400);
+  assert.strictEqual(asked.length, 1);
+  assert.match(asked[0], /deleted from this folder on another computer \(INV-0003\)/);
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0004']);
+  assert.match($('#folderStatus').textContent, /Removed 1 deleted on another computer/);
+  assert.deepStrictEqual(Object.keys(dir.files()).filter(f => f.startsWith('_deleted/')), ['_deleted/INV-0003.json']);
+});
+
+test('cancelling that question keeps the document and forgets the deletion, here and in the folder', async () => {
+  const base = Date.now();
+  const dir = fakeDir();
+  dir.put('_deleted/INV-0003.json', JSON.stringify({ invNumber: 'INV-0003', deletedAt: base }));
+  const { $, saved } = boot({ folder: dir, confirm: false, seed: { 'invoice-list': { 'INV-0003': { ...inv('INV-0003'), updatedAt: base - 1000 } } } });
+  $('#folderBtn').click();
+  await tick(400);
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0003']);
+  assert.ok(dir.files()['Client/INV-0003.json']);
+  assert.strictEqual(dir.files()['_deleted/INV-0003.json'], undefined);
+});
+
+test('a document edited after it was deleted elsewhere is kept and the deletion record is dropped', async () => {
+  const base = Date.now();
+  const dir = fakeDir();
+  dir.put('_deleted/INV-0003.json', JSON.stringify({ invNumber: 'INV-0003', deletedAt: base - 5000 }));
+  const asked = [];
+  const { $, w, saved } = boot({ folder: dir, seed: { 'invoice-list': { 'INV-0003': { ...inv('INV-0003'), updatedAt: base } } } });
+  w.confirm = m => { asked.push(m); return true; };
+  $('#folderBtn').click();
+  await tick(400);
+  assert.deepStrictEqual(asked, []);
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0003']);
+  assert.ok(dir.files()['Client/INV-0003.json']);
+  assert.strictEqual(deletedAt(dir, 'INV-0003'), undefined);
+});
+
+test('deleting a document while a folder is connected leaves a deletion record there; saving the number again clears it', async () => {
+  const dir = fakeDir();
+  const { $, d, type } = boot({ folder: dir, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003') } } });
+  $('#folderBtn').click();
+  await tick(400);
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0003')).click();
+  $('#deleteInvoiceBtn').click();
+  await tick(400);
+  assert.strictEqual(typeof deletedAt(dir, 'INV-0003'), 'number');
+  assert.strictEqual(dir.files()['Client/INV-0003.json'], undefined);
+  $('#newInvoiceBtn').click();
+  type('#invNumber', 'INV-0003');
+  $('#saveInvoiceBtn').click();
+  await tick(400);
+  assert.strictEqual(deletedAt(dir, 'INV-0003'), undefined);
+  assert.ok(Object.keys(dir.files()).some(f => f.endsWith('/INV-0003.json') && !f.startsWith('_deleted')));
+});
+
+test('restoring a backup brings back a document that was deleted', async () => {
+  const dir = fakeDir();
+  const { $, d, w, saved } = boot({ folder: dir, seed: { 'invoice-list': { 'INV-0003': inv('INV-0003') } } });
+  $('#folderBtn').click();
+  await tick(400);
+  [...d.querySelectorAll('.ledger-row')].find(r => r.textContent.includes('INV-0003')).click();
+  $('#deleteInvoiceBtn').click();
+  await tick(400);
+  assert.strictEqual(typeof deletedAt(dir, 'INV-0003'), 'number');
+  const input = $('#importInput');
+  const text = JSON.stringify({ version: 1, invoices: { 'INV-0003': inv('INV-0003') } });
+  Object.defineProperty(input, 'files', { value: [{ text: async () => text }] });
+  input.dispatchEvent(new w.Event('change'));
+  await tick(400);
+  assert.deepStrictEqual(Object.keys(saved()), ['INV-0003']);
+  assert.strictEqual(deletedAt(dir, 'INV-0003'), undefined);
 });

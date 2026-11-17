@@ -341,7 +341,7 @@ function store(key, value, keepStamps) {
   if (key === LIST_KEY) {
     const saved = storage.setList(value, keepStamps);
     if (!saved.ok) return false;
-    if (folderSync) folderSync.mirror(safeParse(saved.json, {}));
+    if (folderSync) folderSync.mirror(safeParse(saved.json, {}), storage.getDeleted());
     return true;
   }
   if (key === LOGO_KEY) return storage.setLogo(value);
@@ -885,6 +885,10 @@ importInput.addEventListener('change', async () => {
   const count = Object.keys(backup.invoices).length;
   const invoices = `${count} invoice${count === 1 ? '' : 's'}`;
   if (!confirm(`Import ${invoices} from this backup? Saved invoices with the same numbers will be replaced.`)) return;
+  // The user is restoring these, so a deletion record for any of them no longer applies.
+  const deleted = storage.getDeleted();
+  Object.keys(backup.invoices).forEach(num => { delete deleted[num]; });
+  storage.setDeleted(deleted);
   if (!store(LIST_KEY, JSON.stringify({ ...getSavedList(), ...backup.invoices }), true)) { alert('Couldn’t import — this browser’s storage is full. Delete some saved invoices and try again.'); return; }
   if (backup.logo && !load(LOGO_KEY)) setLogo(backup.logo);
   recalc(); // imported credit notes may be against the open invoice
@@ -1063,22 +1067,40 @@ function renderFolderState(state, { name, message }) {
 
 // Brings the folder's documents into the saved list. `ask`: say so and let the user choose when the same
 // number differs on both sides. Storing the merged list also writes this browser's documents out to the folder.
-function mergeFromFolder(docs, ask) {
+function mergeFromFolder(found, ask) {
   const local = getSavedList();
-  // The newer copy of a document wins. Only when neither is newer (same time, or saved before times were recorded)
-  // does the user choose.
-  let m = mergeLists(local, docs, 'local');
+  const localDeleted = storage.getDeleted();
+  let folderDeleted = found.deleted;
+  const now = Date.now();
+  // The newer copy of a document wins, and a deletion beats a document that was not edited after it. Only when
+  // neither copy is newer (same time, or saved before times were recorded) does the user choose.
+  let m = mergeSync(local, localDeleted, found.docs, folderDeleted, 'local', now);
   if (ask && m.conflicts.length) {
     const shown = m.conflicts.slice(0, 5).join(', ') + (m.conflicts.length > 5 ? '…' : '');
     if (confirm(`${m.conflicts.length} document${m.conflicts.length === 1 ? ' is' : 's are'} saved both here and in the folder with different contents, and there’s no way to tell which is newer (${shown}).\n\nOK: use the folder’s copies.\nCancel: keep this browser’s copies and overwrite the folder’s.`)) {
-      m = mergeLists(local, docs, 'folder');
+      m = mergeSync(local, localDeleted, found.docs, folderDeleted, 'folder', now);
     }
   }
+  // Documents here that the folder says were deleted elsewhere. Connecting a folder is the one time to ask first.
+  const dropped = m.removed.filter(num => Object.prototype.hasOwnProperty.call(local, num));
+  if (ask && dropped.length) {
+    const shown = dropped.slice(0, 5).join(', ') + (dropped.length > 5 ? '…' : '');
+    if (!confirm(`${dropped.length} document${dropped.length === 1 ? '' : 's'} here ${dropped.length === 1 ? 'was' : 'were'} deleted from this folder on another computer (${shown}).\n\nOK: delete ${dropped.length === 1 ? 'it' : 'them'} here too.\nCancel: keep ${dropped.length === 1 ? 'it' : 'them'} here and in the folder.`)) {
+      const keep = { ...localDeleted };
+      const keepFolder = { ...folderDeleted };
+      dropped.forEach(num => { delete keep[num]; delete keepFolder[num]; });
+      folderDeleted = keepFolder;
+      m = mergeSync(local, keep, found.docs, folderDeleted, 'local', now);
+    }
+  }
+  storage.setDeleted(m.deleted); // before the list, so the folder is told about both together
   if (!store(LIST_KEY, JSON.stringify(m.merged), true)) { alert('Couldn’t merge the folder’s documents — this browser’s storage is full. Export a backup, then delete old invoices to make room.'); return; }
   recalc();
   refreshInvoiceList();
   const n = m.imported.length + m.replaced.length;
+  const gone = m.removed.filter(num => Object.prototype.hasOwnProperty.call(local, num)).length;
   if (n) folderStatus.textContent += ` Loaded ${n} document${n === 1 ? '' : 's'} from it.`;
+  if (gone) folderStatus.textContent += ` Removed ${gone} deleted on another computer.`;
 }
 
 if (typeof createFolderSync === 'function' && window.showDirectoryPicker) {

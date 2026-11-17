@@ -17,7 +17,7 @@ test('IndexedDB: documents saved in one session load in the next, stamped', asyn
   const a = make({ indexedDB: idb });
   assert.strictEqual(a.mode, 'indexeddb');
   assert.strictEqual(a.ready, false);
-  assert.deepStrictEqual(await a.load(), { list: {}, logo: null });
+  assert.deepStrictEqual(await a.load(), { list: {}, logo: null, deleted: {} });
   assert.strictEqual(a.ready, true);
   assert.strictEqual(put(a, { 'INV-0001': inv('INV-0001') }).ok, true);
   assert.strictEqual(list(a)['INV-0001'].updatedAt, 1000); // readable at once, before the database write finishes
@@ -161,4 +161,56 @@ test('localStorage mode: reads and writes go straight to localStorage; a full on
 test('rejects a list that is not a plain object', () => {
   const a = make();
   for (const bad of ['nope', '[]', 'null', '"x"']) assert.strictEqual(a.setList(bad).ok, false);
+});
+
+test('deleting a document records when; saving it again later clears the record', async () => {
+  let t = 1000;
+  const a = make({ indexedDB: newIdb(), now: () => t });
+  await a.load();
+  put(a, { A: inv('A'), B: inv('B') });
+  t = 2000;
+  put(a, { B: inv('B') });
+  assert.deepStrictEqual(a.getDeleted(), { A: 2000 });
+  t = 3000;
+  put(a, { B: inv('B'), A: inv('A') }); // the number is used again: the new copy is stamped after the record
+  assert.deepStrictEqual(a.getDeleted(), {});
+});
+
+test('deletion records survive a restart, and old ones are dropped', async () => {
+  const idb = newIdb();
+  let t = 1000;
+  const a = make({ indexedDB: idb, now: () => t });
+  await a.load();
+  put(a, { A: inv('A') });
+  put(a, {});
+  await a.flush();
+  const b = make({ indexedDB: idb, now: () => t });
+  assert.deepStrictEqual((await b.load()).deleted, { A: 1000 });
+  assert.deepStrictEqual(b.getDeleted(), { A: 1000 });
+  t = 1000 + 181 * 86400000;
+  const c = make({ indexedDB: idb, now: () => t });
+  assert.deepStrictEqual((await c.load()).deleted, {});
+});
+
+test('keepStamps leaves deletion records alone; setDeleted replaces them all', async () => {
+  const a = make({ indexedDB: newIdb() });
+  await a.load();
+  put(a, { A: inv('A') });
+  put(a, {}, true); // a merge removed it and manages the records itself
+  assert.deepStrictEqual(a.getDeleted(), {});
+  assert.strictEqual(a.setDeleted({ A: 900, B: 950, ['__proto__']: 1 }), true);
+  assert.deepStrictEqual(a.getDeleted(), { A: 900, B: 950 });
+  a.setDeleted({});
+  assert.deepStrictEqual(a.getDeleted(), {});
+  const b = make({ indexedDB: newIdb() });
+  assert.strictEqual(b.setDeleted({ A: 1 }), false); // not loaded yet
+});
+
+test('localStorage mode: deletion records live in localStorage', () => {
+  const ls = fakeLs();
+  const a = make({ ls });
+  put(a, { A: inv('A') });
+  put(a, {});
+  assert.deepStrictEqual(a.getDeleted(), { A: 1000 });
+  assert.deepStrictEqual(JSON.parse(ls.map.get('invoice-deleted')), { A: 1000 });
 });

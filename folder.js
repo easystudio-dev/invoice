@@ -1,7 +1,7 @@
 // Mirrors saved documents into a folder the user picked (File System Access API, Chromium only).
 // The app keeps working from localStorage; this copies every change into <folder>/<client>/<number>.json.
 // Loaded as a plain script in the browser, require()'d by folder.test.js with fake folder handles.
-const folderLib = typeof module === 'object' ? require('./lib.js') : { folderPlan, diffPlan, parseFolderDoc };
+const folderLib = typeof module === 'object' ? require('./lib.js') : { folderPlan, diffPlan, parseFolderDoc, parseTombstone, DELETED_FOLDER };
 
 const MAX_DOC_BYTES = 5 * 1024 * 1024;
 
@@ -10,13 +10,13 @@ const MAX_DOC_BYTES = 5 * 1024 * 1024;
 // env.onState      → (state, { name, message }) where state is 'off' | 'needs-permission' | 'ready' | 'error'
 // env.delay        → ms to wait for edits to settle before writing (default 250)
 function createFolderSync(env) {
-  const { folderPlan, diffPlan, parseFolderDoc } = folderLib;
+  const { folderPlan, diffPlan, parseFolderDoc, parseTombstone, DELETED_FOLDER } = folderLib;
   const kv = env.kv;
   const HANDLE_KEY = 'handle';
   let root = null;     // directory handle, once we may read and write it
   let handle = null;   // remembered handle, even while permission is missing
   let synced = {};     // { path: text } for the files we wrote or found in exactly the shape we'd write them
-  let latest = null;
+  let latest = null; // { list, deleted } waiting to be written
   let timer = null;
   let chain = Promise.resolve();
   const api = { state: 'off', name: '', listKey: 'invoice-list' };
@@ -27,9 +27,11 @@ function createFolderSync(env) {
     if (env.onState) env.onState(state, { name: api.name, message });
   }
 
-  // Every valid document in the client subfolders, as { number: doc }, plus the baseline of files to track.
+  // Everything in the folder: { docs: { number: doc }, deleted: { number: deletedAt } }. Documents come from the
+  // client subfolders, deletion records from '_deleted'. Also sets the baseline of files we track.
   async function readFolder(dir) {
     const docs = {};
+    const deleted = {};
     const found = {};
     const paths = [];
     for await (const [dirName, sub] of dir.entries()) {
@@ -43,6 +45,11 @@ function createFolderSync(env) {
       const file = await fileHandle.getFile();
       if (file.size > MAX_DOC_BYTES) continue;
       const text = await file.text();
+      if (path.startsWith(`${DELETED_FOLDER}/`)) {
+        const rec = parseTombstone(text);
+        if (rec) { deleted[rec[0]] = Math.max(deleted[rec[0]] || 0, rec[1]); found[path] = text; }
+        continue;
+      }
       const parsed = parseFolderDoc(text, path.split('/').pop().replace(/\.json$/i, ''));
       if (!parsed || Object.prototype.hasOwnProperty.call(docs, parsed[0])) continue; // first copy wins; others are left alone
       docs[parsed[0]] = parsed[1];
@@ -50,10 +57,10 @@ function createFolderSync(env) {
     }
     // Track only the files that sit exactly where we would put them. A copy the user moved or renamed
     // stays theirs: we never remove a path we didn't plan.
-    const plan = folderPlan(docs);
+    const plan = folderPlan(docs, deleted);
     synced = {};
     Object.keys(plan).forEach(p => { if (found[p] !== undefined) synced[p] = found[p]; });
-    return docs;
+    return { docs, deleted };
   }
 
   async function writeFile(path, text) {
@@ -73,9 +80,9 @@ function createFolderSync(env) {
     try { await root.removeEntry(dirName); } catch { /* not empty: it holds other files, leave it */ }
   }
 
-  async function push(list) {
+  async function push(list, deleted) {
     if (!root) return;
-    const plan = folderPlan(list);
+    const plan = folderPlan(list, deleted);
     const { write, remove } = diffPlan(synced, plan);
     try {
       for (const path of write) { await writeFile(path, plan[path]); synced[path] = plan[path]; }
@@ -95,14 +102,14 @@ function createFolderSync(env) {
     return docs;
   }
 
-  // First visit: ask for a folder. Returns the documents already in it.
+  // First visit: ask for a folder. Returns what is already in it: { docs, deleted }.
   api.choose = async () => {
     const dir = await env.pick();
     try { await kv.set(HANDLE_KEY, dir); } catch { /* can't remember it: it still works this visit */ }
     return open(dir);
   };
 
-  // Later visits: use the remembered folder if the browser still lets us. Returns its documents, or null.
+  // Later visits: use the remembered folder if the browser still lets us. Returns its { docs, deleted }, or null.
   api.resume = async () => {
     try { handle = (await kv.get(HANDLE_KEY)) || null; } catch { handle = null; }
     if (!handle) { setState('off'); return null; }
@@ -128,10 +135,11 @@ function createFolderSync(env) {
     setState('off');
   };
 
-  // Called with the whole saved list after every change. Writes are debounced and run one at a time.
-  api.mirror = (list) => {
+  // Called with the whole saved list and the deletion records after every change. Writes are debounced and run
+  // one at a time.
+  api.mirror = (list, deleted) => {
     if (!root) return;
-    latest = list;
+    latest = { list, deleted: deleted || {} };
     clearTimeout(timer);
     timer = setTimeout(api.flush, env.delay ?? 250);
   };
@@ -139,7 +147,7 @@ function createFolderSync(env) {
   // Writes now whatever is waiting; resolves when the folder is up to date.
   api.flush = () => {
     clearTimeout(timer);
-    if (latest) { const list = latest; latest = null; chain = chain.then(() => push(list)); }
+    if (latest) { const { list, deleted } = latest; latest = null; chain = chain.then(() => push(list, deleted)); }
     return chain;
   };
 
